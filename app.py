@@ -444,10 +444,15 @@ def serve_frontend(path):
 
     candidate = safe_join(WEB_DIST_DIR, path)
     if candidate and os.path.isfile(candidate):
-        return send_from_directory(WEB_DIST_DIR, path)
+        resp = send_from_directory(WEB_DIST_DIR, path)
+        # 带 hash 的静态资源可长期缓存
+        resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return resp
 
-    # SPA 回退：所有页面路由都返回 index.html
-    return send_from_directory(WEB_DIST_DIR, 'index.html')
+    # SPA 回退：index.html 不缓存，确保拿到最新 bundle 引用
+    resp = send_from_directory(WEB_DIST_DIR, 'index.html')
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
 
 
 # ============================================
