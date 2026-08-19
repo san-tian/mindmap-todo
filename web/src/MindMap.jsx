@@ -21,6 +21,22 @@ const formatTime = (d) => {
   return `${hh}:${mm}:${ss}`;
 };
 
+const formatDateTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const pad = (x) => String(x).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+const localDateKey = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const pad = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
 // 全局状态管理器
 class MindMapManager {
   constructor() {
@@ -40,11 +56,18 @@ class MindMapManager {
 
   onStatusChange(nodeId, status) {
     if (!this.setNodes) return;
-    this.setNodes(nds => nds.map(n =>
-      n.id === nodeId
-        ? { ...n, data: { ...n.data, status } }
-        : n
-    ));
+    const now = new Date().toISOString();
+    this.setNodes(nds => nds.map(n => {
+      if (n.id !== nodeId) return n;
+      const prev = n.data.status;
+      const data = { ...n.data, status };
+      if (status === 'done' && prev !== 'done') {
+        data.doneAt = now; // 记录完成时间
+      } else if (status !== 'done' && prev === 'done') {
+        delete data.doneAt; // 取消完成时清除完成时间
+      }
+      return { ...n, data };
+    }));
   }
 
   onStatusToggle(nodeId) {
@@ -69,7 +92,7 @@ class MindMapManager {
       id: newId,
       type: 'custom',
       position: { x: parentNode.position.x + 210, y: parentNode.position.y + childCount * 56 },
-      data: { label: '新任务', status: 'pending' },
+      data: { label: '新任务', status: 'pending', createdAt: new Date().toISOString() },
     };
 
     const newEdge = {
@@ -330,6 +353,11 @@ function TodoItem({ todo, statusKey, onSelect, onStatusChange, onLabelChange, on
     }
   };
 
+  const status = todo.data?.status || 'pending';
+  const timeLabel = status === 'done'
+    ? (todo.data?.doneAt ? `完成 ${formatDateTime(todo.data.doneAt)}` : '')
+    : (todo.data?.createdAt ? `创建 ${formatDateTime(todo.data.createdAt)}` : '');
+
   return (
     <div
       className={`todo-item todo-item-${statusKey}`}
@@ -353,29 +381,32 @@ function TodoItem({ todo, statusKey, onSelect, onStatusChange, onLabelChange, on
         <option value="pending">○ 待办</option>
         <option value="done">✓ 已完成</option>
       </select>
-      {editing ? (
-        <input
-          ref={inputRef}
-          className="todo-edit-input"
-          draggable={false}
-          value={val}
-          onChange={(e) => setVal(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            if (e.key === 'Escape') { setVal(todo.data?.label || ''); setEditing(false); }
-          }}
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <span
-          className="todo-text"
-          title="双击编辑内容"
-          onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
-        >
-          {todo.data?.label || '未命名任务'}
-        </span>
-      )}
+      <div className="todo-item-body">
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="todo-edit-input"
+            draggable={false}
+            value={val}
+            onChange={(e) => setVal(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); commit(); }
+              if (e.key === 'Escape') { setVal(todo.data?.label || ''); setEditing(false); }
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            className="todo-text"
+            title="双击编辑内容"
+            onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
+          >
+            {todo.data?.label || '未命名任务'}
+          </span>
+        )}
+        {timeLabel && <span className="todo-time">{timeLabel}</span>}
+      </div>
     </div>
   );
 }
@@ -450,7 +481,12 @@ export default function MindMap() {
     try {
       const nodesToSave = nodesRef.current.map(n => ({
         ...n,
-        data: { label: n.data.label, status: n.data.status },
+        data: {
+          label: n.data.label,
+          status: n.data.status,
+          createdAt: n.data.createdAt,
+          doneAt: n.data.doneAt,
+        },
       }));
       const response = await fetch(`/api/projects/${pid}`, {
         method: 'POST',
@@ -886,6 +922,20 @@ export default function MindMap() {
     return byStatus;
   }, [todos]);
 
+  // 今日新建 / 完成统计（基于叶子节点）
+  const todayStats = React.useMemo(() => {
+    const now = new Date();
+    const pad = (x) => String(x).padStart(2, '0');
+    const todayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    let created = 0;
+    let done = 0;
+    todos.forEach(t => {
+      if (localDateKey(t.data?.createdAt) === todayKey) created++;
+      if (localDateKey(t.data?.doneAt) === todayKey) done++;
+    });
+    return { created, done };
+  }, [todos]);
+
   const nodesForRender = React.useMemo(() => {
     // 计算每个节点的层级（根=0，其直接子级=1，以此类推）
     const parentOf = new Map();
@@ -984,7 +1034,7 @@ export default function MindMap() {
                       id: newId,
                       type: 'custom',
                       position: { x: 50, y: 250 },
-                      data: { label: '新任务', status: 'pending', isRoot: true },
+                      data: { label: '新任务', status: 'pending', isRoot: true, createdAt: new Date().toISOString() },
                     }]);
                   }}
                   className="btn btn-primary btn-lg"
@@ -1040,6 +1090,7 @@ export default function MindMap() {
         {showTodos && (
           <div className="todo-sidebar">
             <h2 className="todo-title">任务列表</h2>
+            <p className="todo-today">今日新建 {todayStats.created} · 完成 {todayStats.done}</p>
             {todos.length === 0 ? (
               <p className="todo-empty">暂无任务</p>
             ) : (

@@ -353,6 +353,25 @@
   text-decoration: line-through;
 }
 
+.todo-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.todo-time {
+  font-size: 11px;
+  color: #9aa1a9;
+}
+
+.todo-today {
+  font-size: 12px;
+  color: #8f959e;
+  margin: -4px 0 12px 0;
+}
+
 /* 自定义节点样式 - 扁平文字风格 */
 .node {
   padding: 5px 9px;

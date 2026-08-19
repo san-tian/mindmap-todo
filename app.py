@@ -138,7 +138,7 @@ def create_project(name):
         'id': '1',
         'type': 'custom',
         'position': {'x': 50, 'y': 250},
-        'data': {'label': name, 'status': 'pending'},
+        'data': {'label': name, 'status': 'pending', 'createdAt': _now()},
     }
     p = {
         'id': pid,
@@ -264,7 +264,7 @@ def api_add_node(pid):
             'id': new_id,
             'type': 'custom',
             'position': {'x': 50, 'y': 250},
-            'data': {'label': label, 'status': status},
+            'data': {'label': label, 'status': status, 'createdAt': _now()},
         }
 
         if parent_id and any(n['id'] == parent_id for n in nodes):
@@ -306,6 +306,11 @@ def api_update_node(pid, nid):
         if 'label' in body:
             node['data']['label'] = (body['label'] or '').strip() or node['data'].get('label', '')
         if body.get('status') in ('running', 'pending', 'done'):
+            prev = node['data'].get('status')
+            if body['status'] == 'done' and prev != 'done':
+                node['data']['doneAt'] = _now()
+            elif body['status'] != 'done' and prev == 'done':
+                node['data'].pop('doneAt', None)
             node['data']['status'] = body['status']
 
         p = _save_project(pid, nodes, p.get('edges', []))
