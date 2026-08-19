@@ -234,6 +234,163 @@ def api_delete_project(pid):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/projects/<pid>/nodes', methods=['POST'])
+def api_add_node(pid):
+    """新增节点；可指定 parentId 作为其子节点，否则作为根节点"""
+    try:
+        p = _load_project(pid)
+        if not p:
+            return jsonify({'success': False, 'error': 'project not found'}), 404
+
+        body = request.get_json(silent=True) or {}
+        label = (body.get('label') or '').strip() or '新任务'
+        status = body.get('status') or 'pending'
+        if status not in ('running', 'pending', 'done'):
+            status = 'pending'
+        parent_id = body.get('parentId')
+
+        nodes = p.get('nodes', [])
+        edges = p.get('edges', [])
+
+        max_id = 0
+        for n in nodes:
+            try:
+                max_id = max(max_id, int(n['id']))
+            except (ValueError, TypeError):
+                pass
+        new_id = str(max_id + 1)
+
+        new_node = {
+            'id': new_id,
+            'type': 'custom',
+            'position': {'x': 50, 'y': 250},
+            'data': {'label': label, 'status': status},
+        }
+
+        if parent_id and any(n['id'] == parent_id for n in nodes):
+            parent = next(n for n in nodes if n['id'] == parent_id)
+            child_count = sum(1 for e in edges if e['source'] == parent_id)
+            new_node['position'] = {
+                'x': parent['position']['x'] + 240,
+                'y': parent['position']['y'] + child_count * 50,
+            }
+            edges.append({
+                'id': f'e{parent_id}-{new_id}',
+                'source': parent_id,
+                'target': new_id,
+                'type': 'default',
+                'markerEnd': {'type': 'arrowclosed'},
+            })
+
+        nodes.append(new_node)
+        p = _save_project(pid, nodes, edges)
+        return jsonify({'success': True, 'node': new_node, 'project': p})
+    except Exception as e:
+        print(f"Error adding node: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/projects/<pid>/nodes/<nid>', methods=['PATCH'])
+def api_update_node(pid, nid):
+    """更新节点（label / status）"""
+    try:
+        p = _load_project(pid)
+        if not p:
+            return jsonify({'success': False, 'error': 'project not found'}), 404
+        body = request.get_json(silent=True) or {}
+        nodes = p.get('nodes', [])
+        node = next((n for n in nodes if n['id'] == nid), None)
+        if not node:
+            return jsonify({'success': False, 'error': 'node not found'}), 404
+
+        if 'label' in body:
+            node['data']['label'] = (body['label'] or '').strip() or node['data'].get('label', '')
+        if body.get('status') in ('running', 'pending', 'done'):
+            node['data']['status'] = body['status']
+
+        p = _save_project(pid, nodes, p.get('edges', []))
+        return jsonify({'success': True, 'node': node, 'project': p})
+    except Exception as e:
+        print(f"Error updating node: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/projects/<pid>/nodes/<nid>', methods=['DELETE'])
+def api_delete_node(pid, nid):
+    """删除节点及其整棵子树"""
+    try:
+        p = _load_project(pid)
+        if not p:
+            return jsonify({'success': False, 'error': 'project not found'}), 404
+        nodes = p.get('nodes', [])
+        edges = p.get('edges', [])
+        if not any(n['id'] == nid for n in nodes):
+            return jsonify({'success': False, 'error': 'node not found'}), 404
+
+        to_delete = {nid}
+        changed = True
+        while changed:
+            changed = False
+            for e in edges:
+                if e['source'] in to_delete and e['target'] not in to_delete:
+                    to_delete.add(e['target'])
+                    changed = True
+
+        nodes = [n for n in nodes if n['id'] not in to_delete]
+        edges = [e for e in edges if e['source'] not in to_delete and e['target'] not in to_delete]
+        p = _save_project(pid, nodes, edges)
+        return jsonify({'success': True, 'deleted': sorted(to_delete)})
+    except Exception as e:
+        print(f"Error deleting node: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/projects/<pid>/nodes/<nid>/move', methods=['POST'])
+def api_move_node(pid, nid):
+    """移动节点到新父节点下（parentId 为空则变成根节点）"""
+    try:
+        p = _load_project(pid)
+        if not p:
+            return jsonify({'success': False, 'error': 'project not found'}), 404
+        body = request.get_json(silent=True) or {}
+        parent_id = body.get('parentId')
+        nodes = p.get('nodes', [])
+        edges = p.get('edges', [])
+
+        if not any(n['id'] == nid for n in nodes):
+            return jsonify({'success': False, 'error': 'node not found'}), 404
+        if nid == parent_id:
+            return jsonify({'success': False, 'error': 'cannot move node under itself'}), 400
+
+        # 防环：parent 不能是 nid 的后代
+        descendants = {nid}
+        changed = True
+        while changed:
+            changed = False
+            for e in edges:
+                if e['source'] in descendants and e['target'] not in descendants:
+                    descendants.add(e['target'])
+                    changed = True
+        if parent_id in descendants:
+            return jsonify({'success': False, 'error': 'cannot move node under its own descendant'}), 400
+
+        edges = [e for e in edges if e['target'] != nid]
+        if parent_id and any(n['id'] == parent_id for n in nodes):
+            edges.append({
+                'id': f'e{parent_id}-{nid}',
+                'source': parent_id,
+                'target': nid,
+                'type': 'default',
+                'markerEnd': {'type': 'arrowclosed'},
+            })
+
+        p = _save_project(pid, nodes, edges)
+        return jsonify({'success': True, 'project': p})
+    except Exception as e:
+        print(f"Error moving node: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """健康检查"""
