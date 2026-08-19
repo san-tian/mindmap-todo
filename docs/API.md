@@ -21,7 +21,7 @@
   "position": { "x": 50, "y": 250 },
   "data": {
     "label": "任务文字",
-    "status": "pending"             // running | pending | done | context
+    "status": "pending"             // running | waiting | pending | idel | done | context
     "createdAt": "2026-08-19T06:57:05Z",  // 创建时间（自动生成）
     "doneAt": "2026-08-19T07:00:00Z",      // 完成时间（status→done 时自动生成）
     "quadrant": "q1"                       // 四象限：q1/q2/q3/q4（可选）
@@ -49,7 +49,7 @@
 ```
 
 - **根节点**（一级节点）：没有入边的节点，其 `label` 即项目名。
-- 节点 `status`：`running`（进行中）/ `pending`（待办）/ `done`（完成）/ `context`（上下文/项目描述，不计入 TODO）。
+- 节点 `status`：`running`（进行中）/ `waiting`（等待中）/ `pending`（待办）/ `idel`（暂缓）/ `done`（完成）/ `context`（上下文/项目描述，不计入 TODO）。
 
 ## 接口总览
 
@@ -119,7 +119,7 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 - 新增节点不指定 `parentId` 时会成为新的根节点；指定则挂为子节点。
 - 移动节点会自动做防环校验（不能移到自己的后代下面）。
 - 删除节点会递归删除整棵子树。
-- 节点 `status` 只接受 `running` / `pending` / `done` / `context`。
+- 节点 `status` 只接受 `running` / `waiting` / `pending` / `idel` / `done` / `context`。
 - 节点 `quadrant`（四象限，可选）只接受 `q1`（重要紧急）/ `q2`（重要不紧急）/ `q3`（不重要紧急）/ `q4`（不重要不紧急）；传空值表示清除。
 - 节点自动记录 `createdAt`（创建时间）和 `doneAt`（变为 done 的时间；取消 done 时自动清除）。
 - 前端加载项目时会自动按当前规则重新排版，因此 API 写入的坐标只是初始值，不必精确。

@@ -20,7 +20,7 @@ mindmap-todo 是一个多项目、思维导图形式的任务管理应用。无�
 
 - **项目（project）**：一张独立的导图，`id` 为 8 位 hex 字符串；根节点（一级节点）的 `label` 即项目名。
 - **节点（node）**：`id` 为数字字符串；`data.label` 是文字，`data.status` 是状态。
-- **状态**：`running`（进行中）/ `pending`（待办）/ `done`（完成）/ `context`（上下文/项目描述，不计入 TODO）。
+- **状态**：`running`（进行中）/ `waiting`（等待中）/ `pending`（待办）/ `idel`（暂缓）/ `done`（完成）/ `context`（上下文/项目描述，不计入 TODO）。
 - **四象限**：节点可选 `quadrant` 字段，取值 `q1`（重要紧急）/ `q2`（重要不紧急）/ `q3`（不重要紧急）/ `q4`（不重要不紧急）；传空值清除。
 - **时间**：节点自动记录 `createdAt`（创建）和 `doneAt`（标记完成时自动生成，取消完成时清除）。
 - **父子关系**：由边 `source -> target` 表达；没有入边的节点是根节点。

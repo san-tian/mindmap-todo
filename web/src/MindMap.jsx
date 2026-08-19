@@ -11,7 +11,7 @@ import ReactFlow, {
   useEdgesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Plus, Save, Check, Circle, Play, Info } from 'lucide-react';
+import { Plus, Save, Check, Circle, Play, Info, Clock, Pause } from 'lucide-react';
 import './MindMap.css';
 
 const formatTime = (d) => {
@@ -231,6 +231,8 @@ const manager = new MindMapManager();
 function StatusIcon({ status }) {
   const s = status || 'pending';
   if (s === 'running') return <Play className="icon icon-play" />;
+  if (s === 'waiting') return <Clock className="icon icon-clock" />;
+  if (s === 'idel') return <Pause className="icon icon-pause" />;
   if (s === 'done') return <Check className="icon icon-check" />;
   if (s === 'context') return <Info className="icon icon-info" />;
   return <Circle className="icon icon-circle" />;
@@ -320,17 +322,9 @@ function CustomNode({ data, id }) {
               manager.onStatusToggle(id);
             }}
             className="status-btn nodrag"
-            title="点击标记完成 / 未完成（R/P/D 可设具体状态）"
+            title="点击标记完成 / 未完成（R/P/D/C/W/I 可设具体状态）"
           >
-            {status === 'running' ? (
-              <Play className="icon icon-play" />
-            ) : status === 'done' ? (
-              <Check className="icon icon-check" />
-            ) : status === 'context' ? (
-              <Info className="icon icon-info" />
-            ) : (
-              <Circle className="icon icon-circle" />
-            )}
+            <StatusIcon status={status} />
           </button>
           {isEditing ? (
             <div className="node-edit-container">
@@ -425,7 +419,9 @@ function TodoItem({ todo, statusKey, onSelect, onStatusChange, onLabelChange, on
         onChange={(e) => onStatusChange(todo.id, e.target.value)}
       >
         <option value="running">▶ 运行中</option>
+        <option value="waiting">⏳ 等待中</option>
         <option value="pending">○ 待办</option>
+        <option value="idel">⏸ 暂缓</option>
         <option value="done">✓ 已完成</option>
         <option value="context">ℹ 上下文</option>
       </select>
@@ -618,6 +614,17 @@ export default function MindMap() {
       if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
         manager.onStatusChange(selectedNodeId, 'context');
+        return;
+      }
+      // w：等待中（等别人）；i：暂缓（暂时不用做）
+      if (e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
+        manager.onStatusChange(selectedNodeId, 'waiting');
+        return;
+      }
+      if (e.key === 'i' || e.key === 'I') {
+        e.preventDefault();
+        manager.onStatusChange(selectedNodeId, 'idel');
         return;
       }
 
@@ -1007,7 +1014,7 @@ export default function MindMap() {
   };
 
   const groupedTodos = React.useMemo(() => {
-    const byStatus = { running: [], pending: [], done: [] };
+    const byStatus = { running: [], waiting: [], pending: [], idel: [], done: [] };
     todos.forEach(t => {
       const s = t.data?.status;
       (byStatus[s] || byStatus.pending).push(t);
@@ -1237,7 +1244,9 @@ export default function MindMap() {
                   <div className="todo-groups">
                     {[
                       { key: 'running', title: '运行中', icon: <Play className="icon-sm todo-icon" /> },
+                      { key: 'waiting', title: '等待中', icon: <Clock className="icon-sm todo-icon" /> },
                       { key: 'pending', title: '待办', icon: <Circle className="icon-sm todo-icon" /> },
+                      { key: 'idel', title: '暂缓', icon: <Pause className="icon-sm todo-icon" /> },
                       { key: 'done', title: '已完成', icon: <Check className="icon-sm todo-icon" /> },
                     ].map(group => (
                       <div

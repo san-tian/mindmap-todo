@@ -444,12 +444,28 @@
   color: #86909c;
 }
 
+.todo-group-waiting .todo-icon {
+  color: #3370ff;
+}
+
+.todo-group-idel .todo-icon {
+  color: #8f959e;
+}
+
 .todo-item-running .todo-text {
   color: #1f2329;
 }
 
 .todo-item-pending .todo-text {
   color: #d4a106;
+}
+
+.todo-item-waiting .todo-text {
+  color: #3370ff;
+}
+
+.todo-item-idel .todo-text {
+  color: #8f959e;
 }
 
 .todo-item-done .todo-text {
@@ -540,6 +556,24 @@
 .node-label-context {
   color: #8f959e;
   font-style: italic;
+}
+
+.node-status-waiting {
+  background: #eaf1ff;
+  border: 1px solid #b7d0ff;
+}
+
+.node-label-waiting {
+  color: #3370ff;
+}
+
+.node-status-idel {
+  background: #f2f3f5;
+  border: 1px solid #e0e2e6;
+}
+
+.node-label-idel {
+  color: #8f959e;
 }
 
 /* 拖拽时的目标节点高亮 */
@@ -639,6 +673,14 @@
 }
 
 .icon-info {
+  color: #8f959e;
+}
+
+.icon-clock {
+  color: #3370ff;
+}
+
+.icon-pause {
   color: #8f959e;
 }
 
