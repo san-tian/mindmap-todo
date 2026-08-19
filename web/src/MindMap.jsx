@@ -716,7 +716,7 @@ export default function MindMap() {
   }, []);
 
   // 自动布局函数：子节点贴着父节点右侧（动态缩进），不同层级不强制同列
-  const autoLayout = React.useCallback(() => {
+  const autoLayout = React.useCallback((fitViewAfter = true) => {
     setNodes(nds => {
       const nodeMap = new Map(nds.map(n => [n.id, { ...n }]));
       const edgeList = edgesRef.current;
@@ -785,9 +785,11 @@ export default function MindMap() {
       return Array.from(nodeMap.values());
     });
 
-    requestAnimationFrame(() => {
-      flowRef.current?.fitView({ padding: 0.08, duration: 200, maxZoom: 1.3 });
-    });
+    if (fitViewAfter) {
+      requestAnimationFrame(() => {
+        flowRef.current?.fitView({ padding: 0.08, duration: 200, maxZoom: 1.3 });
+      });
+    }
   }, [setNodes]);
 
   // 绑定到 manager
@@ -803,7 +805,7 @@ export default function MindMap() {
     }]);
   }, [setEdges]);
 
-  // 计算被拖节点当前悬停的目标节点（用于高亮提示）
+  // 计算被拖节点当前悬停的目标节点（仅当节点中心落在目标内部时，视为“重挂载”意图）
   const findDropTarget = React.useCallback((dragged) => {
     const edges = edgesRef.current;
 
@@ -821,25 +823,19 @@ export default function MindMap() {
     const parentEdge = edges.find(e => e.target === dragged.id);
     if (parentEdge) invalid.add(parentEdge.source);
 
-    const dw = dragged.width || 180;
-    const dh = dragged.height || 48;
-    const a = { x: dragged.position.x, y: dragged.position.y, w: dw, h: dh };
+    const cx = dragged.position.x + (dragged.width || 180) / 2;
+    const cy = dragged.position.y + (dragged.height || 48) / 2;
 
-    let best = null;
-    let bestArea = 0;
-    nodesRef.current.forEach(n => {
-      if (invalid.has(n.id)) return;
+    for (const n of nodesRef.current) {
+      if (invalid.has(n.id)) continue;
       const w = n.width || 180;
       const h = n.height || 48;
-      const overlapX = Math.max(0, Math.min(a.x + a.w, n.position.x + w) - Math.max(a.x, n.position.x));
-      const overlapY = Math.max(0, Math.min(a.y + a.h, n.position.y + h) - Math.max(a.y, n.position.y));
-      const area = overlapX * overlapY;
-      if (area > 0 && area > bestArea) {
-        bestArea = area;
-        best = n;
+      if (cx >= n.position.x && cx <= n.position.x + w &&
+          cy >= n.position.y && cy <= n.position.y + h) {
+        return n;
       }
-    });
-    return best;
+    }
+    return null;
   }, []);
 
   const handleNodeDrag = React.useCallback((event, node) => {
@@ -855,6 +851,9 @@ export default function MindMap() {
     const target = findDropTarget(node);
     if (target) {
       manager.onReparent(node.id, target.id);
+    } else {
+      // 没有重挂载目标：按新位置在同级内重排（不重新 fitView，保持视野）
+      manager.autoLayout?.(false);
     }
   }, [findDropTarget]);
 
