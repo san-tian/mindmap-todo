@@ -641,8 +641,7 @@ export default function MindMap() {
     initProjects();
   }, []);
 
-  // 自动布局函数：飞书风格的紧凑大纲树（每节点一行，父在上、子缩进在下）
-  // 自动布局函数：子节点贴着父节点右侧（动态缩进），不同层级不再强制同列
+  // 自动布局函数：固定缩进的经典树形（每层对齐在同一竖线上，父节点垂直居中）
   const autoLayout = React.useCallback(() => {
     setNodes(nds => {
       const nodeMap = new Map(nds.map(n => [n.id, { ...n }]));
@@ -664,56 +663,51 @@ export default function MindMap() {
         .filter(n => !edgeList.some(e => e.target === n.id))
         .sort((a, b) => (a.position?.y || 0) - (b.position?.y || 0));
 
-      const H_GAP = 36;   // 父节点右边缘到子节点左边缘的水平间距
-      const V_GAP = 6;    // 兄弟节点垂直间距
-      const ROOT_GAP = 24;
       const START_X = 24;
       const START_Y = 28;
-
-      // 节点尺寸：优先用已测量的实际尺寸，否则按文字长度估算
-      const nodeW = (n) => (n.width && n.width > 0)
-        ? n.width
-        : Math.max(60, Math.min(220, (n.data?.label?.length || 2) * 13 + 36));
-      const nodeH = (n) => (n.height && n.height > 0) ? n.height : 40;
+      const INDENT_X = 200;
+      const LEAF_H = 46;
+      const LEAF_W = 220;
+      const GAP_Y = 8;
+      const ROOT_GAP = 28;
 
       const layoutNode = (nodeId, x, y) => {
         const node = nodeMap.get(nodeId);
-        if (!node) return 0;
+        if (!node) return { w: 0, h: 0 };
 
-        const w = nodeW(node);
-        const h = nodeH(node);
         node.position = { x, y };
 
         const kids = childrenMap.get(nodeId) || [];
-        if (kids.length === 0) return h;
-
-        const childX = x + w + H_GAP;
-        let cy = y;
-        let totalH = 0;
-        kids.forEach(kid => {
-          const kh = layoutNode(kid, childX, cy);
-          cy += kh + V_GAP;
-          totalH += kh + V_GAP;
-        });
-        totalH -= V_GAP;
-
-        if (totalH > h) {
-          node.position.y = y + (totalH - h) / 2;
+        if (kids.length === 0) {
+          return { w: LEAF_W, h: LEAF_H };
         }
-        return Math.max(totalH, h);
+
+        let cy = y;
+        let mw = LEAF_W;
+        kids.forEach(kid => {
+          const r = layoutNode(kid, x + INDENT_X, cy);
+          cy += r.h + GAP_Y;
+          mw = Math.max(mw, INDENT_X + r.w);
+        });
+
+        const totalH = cy - y - GAP_Y;
+        if (totalH > LEAF_H) {
+          node.position.y = y + (totalH - LEAF_H) / 2;
+        }
+        return { w: mw, h: Math.max(totalH, LEAF_H) };
       };
 
       let cy = START_Y;
       rootNodes.forEach((root, i) => {
-        const rh = layoutNode(root.id, START_X, cy);
-        cy += rh + (i < rootNodes.length - 1 ? ROOT_GAP : 0);
+        const r = layoutNode(root.id, START_X, cy);
+        cy += r.h + (i < rootNodes.length - 1 ? ROOT_GAP : 0);
       });
 
       return Array.from(nodeMap.values());
     });
 
     requestAnimationFrame(() => {
-      flowRef.current?.fitView({ padding: 0.08, duration: 200, maxZoom: 1.3 });
+      flowRef.current?.fitView({ padding: 0.08, duration: 200, maxZoom: 1.2 });
     });
   }, [setNodes]);
 
