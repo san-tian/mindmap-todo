@@ -45,6 +45,21 @@ const timeOfDay = (iso) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
+// 四象限（艾森豪威尔矩阵）
+const QUADRANTS = {
+  q1: { label: '重要紧急', color: '#f53f3f' },
+  q2: { label: '重要不紧急', color: '#3370ff' },
+  q3: { label: '不重要紧急', color: '#ff8800' },
+  q4: { label: '不重要不紧急', color: '#86909c' },
+};
+const QUADRANT_ORDER = [
+  { key: 'q1', label: QUADRANTS.q1.label, color: QUADRANTS.q1.color },
+  { key: 'q2', label: QUADRANTS.q2.label, color: QUADRANTS.q2.color },
+  { key: 'q3', label: QUADRANTS.q3.label, color: QUADRANTS.q3.color },
+  { key: 'q4', label: QUADRANTS.q4.label, color: QUADRANTS.q4.color },
+  { key: 'none', label: '未分类', color: '#c9cdd4' },
+];
+
 // 全局状态管理器
 class MindMapManager {
   constructor() {
@@ -83,6 +98,20 @@ class MindMapManager {
     const current = node?.data?.status || 'pending';
     // 按钮二态切换：done / context → pending；running / pending → done
     this.onStatusChange(nodeId, (current === 'done' || current === 'context') ? 'pending' : 'done');
+  }
+
+  onQuadrantChange(nodeId, quadrant) {
+    if (!this.setNodes) return;
+    this.setNodes(nds => nds.map(n => {
+      if (n.id !== nodeId) return n;
+      const data = { ...n.data };
+      if (quadrant && QUADRANTS[quadrant]) {
+        data.quadrant = quadrant;
+      } else {
+        delete data.quadrant;
+      }
+      return { ...n, data };
+    }));
   }
 
   onAddChild(parentId) {
@@ -332,6 +361,13 @@ function CustomNode({ data, id }) {
               {label}
             </div>
           )}
+          {data.quadrant && QUADRANTS[data.quadrant] && (
+            <span
+              className="quadrant-dot"
+              style={{ backgroundColor: QUADRANTS[data.quadrant].color }}
+              title={`四象限：${QUADRANTS[data.quadrant].label}`}
+            />
+          )}
         </div>
       </div>
       <Handle type="source" position={Position.Right} className="node-handle" />
@@ -438,7 +474,8 @@ export default function MindMap() {
   const [currentProjectId, setCurrentProjectId] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [dragOverGroup, setDragOverGroup] = React.useState(null);
-  const [viewMode, setViewMode] = React.useState('status'); // status | time
+  const [dragOverQuadrant, setDragOverQuadrant] = React.useState(null);
+  const [viewMode, setViewMode] = React.useState('status'); // status | time | quadrant
   const [bgMode, setBgMode] = React.useState('white'); // white | dots | lines
   const bgModeLoadedRef = React.useRef(false);
 
@@ -499,6 +536,7 @@ export default function MindMap() {
           status: n.data.status,
           createdAt: n.data.createdAt,
           doneAt: n.data.doneAt,
+          quadrant: n.data.quadrant,
         },
       }));
       const response = await fetch(`/api/projects/${pid}`, {
@@ -580,6 +618,33 @@ export default function MindMap() {
       if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
         manager.onStatusChange(selectedNodeId, 'context');
+        return;
+      }
+
+      // 1/2/3/4：设置四象限；0 清除
+      if (e.key === '1') {
+        e.preventDefault();
+        manager.onQuadrantChange(selectedNodeId, 'q1');
+        return;
+      }
+      if (e.key === '2') {
+        e.preventDefault();
+        manager.onQuadrantChange(selectedNodeId, 'q2');
+        return;
+      }
+      if (e.key === '3') {
+        e.preventDefault();
+        manager.onQuadrantChange(selectedNodeId, 'q3');
+        return;
+      }
+      if (e.key === '4') {
+        e.preventDefault();
+        manager.onQuadrantChange(selectedNodeId, 'q4');
+        return;
+      }
+      if (e.key === '0') {
+        e.preventDefault();
+        manager.onQuadrantChange(selectedNodeId, null);
         return;
       }
 
@@ -990,6 +1055,17 @@ export default function MindMap() {
     }));
   }, [todos]);
 
+  // 四象限分组（基于叶子任务）
+  const quadrantGroups = React.useMemo(() => {
+    const groups = { q1: [], q2: [], q3: [], q4: [], none: [] };
+    todos.forEach(t => {
+      const q = t.data?.quadrant;
+      if (q && QUADRANTS[q]) groups[q].push(t);
+      else groups.none.push(t);
+    });
+    return groups;
+  }, [todos]);
+
   const nodesForRender = React.useMemo(() => {
     // 计算每个节点的层级（根=0，其直接子级=1，以此类推）
     const parentOf = new Map();
@@ -1040,7 +1116,7 @@ export default function MindMap() {
               删除
             </button>
           </div>
-          <p className="subtitle">双击编辑 | 选中后：Tab 子节点 · Enter 同级 · Del 删除 · R/P/D 状态 · 拖拽到另一节点改层级</p>
+          <p className="subtitle">双击编辑 | 选中后：Tab 子节点 · Enter 同级 · Del 删除 · R/P/D/C 状态 · 1-4 四象限 · 拖拽改层级</p>
         </div>
         <div className="toolbar-actions">
           <button onClick={() => setShowTodos(!showTodos)} className="btn btn-outline">
@@ -1148,6 +1224,7 @@ export default function MindMap() {
               <div className="todo-view-switch">
                 <button className={viewMode === 'status' ? 'active' : ''} onClick={() => setViewMode('status')}>状态</button>
                 <button className={viewMode === 'time' ? 'active' : ''} onClick={() => setViewMode('time')}>时间</button>
+                <button className={viewMode === 'quadrant' ? 'active' : ''} onClick={() => setViewMode('quadrant')}>四象限</button>
               </div>
             </div>
 
@@ -1203,7 +1280,7 @@ export default function MindMap() {
                   </div>
                 )}
               </>
-            ) : (
+            ) : viewMode === 'time' ? (
               <div className="time-groups">
                 {timeGroups.length === 0 ? (
                   <p className="todo-empty">暂无时间记录</p>
@@ -1225,6 +1302,49 @@ export default function MindMap() {
                     </div>
                   ))
                 )}
+              </div>
+            ) : (
+              <div className="quadrant-groups">
+                {QUADRANT_ORDER.map(q => (
+                  <div
+                    key={q.key}
+                    className={`quadrant-group ${dragOverQuadrant === q.key ? 'todo-group-dragover' : ''}`}
+                    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                    onDragEnter={(e) => { e.preventDefault(); setDragOverQuadrant(q.key); }}
+                    onDragLeave={(e) => { if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return; setDragOverQuadrant(null); }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const id = e.dataTransfer.getData('text/plain');
+                      if (id) manager.onQuadrantChange(id, q.key === 'none' ? null : q.key);
+                      setDragOverQuadrant(null);
+                    }}
+                  >
+                    <h3 className="quadrant-group-title">
+                      <span className="quadrant-dot" style={{ backgroundColor: q.color }} />
+                      {q.label}
+                      <span className="todo-group-count">{quadrantGroups[q.key].length}</span>
+                    </h3>
+                    {quadrantGroups[q.key].length === 0 ? (
+                      <p className="todo-group-empty">暂无（拖入任务到此象限）</p>
+                    ) : (
+                      <div className="todo-list">
+                        {quadrantGroups[q.key].map(t => (
+                          <div
+                            key={t.id}
+                            className={`todo-item todo-item-${t.data?.status || 'pending'}`}
+                            draggable
+                            onDragStart={(e) => { e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; }}
+                            onDragEnd={() => setDragOverQuadrant(null)}
+                            onClick={() => selectNode(t.id)}
+                          >
+                            <StatusIcon status={t.data?.status} />
+                            <span className="todo-text">{t.data?.label || '未命名任务'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>

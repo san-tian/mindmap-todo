@@ -247,6 +247,9 @@ def api_add_node(pid):
         status = body.get('status') or 'pending'
         if status not in ('running', 'pending', 'done', 'context'):
             status = 'pending'
+        quadrant = body.get('quadrant')
+        if quadrant not in ('q1', 'q2', 'q3', 'q4'):
+            quadrant = None
         parent_id = body.get('parentId')
 
         nodes = p.get('nodes', [])
@@ -260,11 +263,15 @@ def api_add_node(pid):
                 pass
         new_id = str(max_id + 1)
 
+        data = {'label': label, 'status': status, 'createdAt': _now()}
+        if quadrant:
+            data['quadrant'] = quadrant
+
         new_node = {
             'id': new_id,
             'type': 'custom',
             'position': {'x': 50, 'y': 250},
-            'data': {'label': label, 'status': status, 'createdAt': _now()},
+            'data': data,
         }
 
         if parent_id and any(n['id'] == parent_id for n in nodes):
@@ -312,6 +319,12 @@ def api_update_node(pid, nid):
             elif body['status'] != 'done' and prev == 'done':
                 node['data'].pop('doneAt', None)
             node['data']['status'] = body['status']
+        if 'quadrant' in body:
+            q = body.get('quadrant')
+            if q in ('q1', 'q2', 'q3', 'q4'):
+                node['data']['quadrant'] = q
+            else:
+                node['data'].pop('quadrant', None)
 
         p = _save_project(pid, nodes, p.get('edges', []))
         return jsonify({'success': True, 'node': node, 'project': p})

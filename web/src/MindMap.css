@@ -302,6 +302,32 @@
   text-decoration: line-through;
 }
 
+.quadrant-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.node .quadrant-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.quadrant-group {
+  margin-bottom: 14px;
+}
+
+.quadrant-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #646a73;
+  margin: 0 0 6px 0;
+}
+
 .todo-empty {
   color: #8f959e;
   font-size: 13px;

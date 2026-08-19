@@ -23,7 +23,8 @@
     "label": "任务文字",
     "status": "pending"             // running | pending | done | context
     "createdAt": "2026-08-19T06:57:05Z",  // 创建时间（自动生成）
-    "doneAt": "2026-08-19T07:00:00Z"       // 完成时间（status→done 时自动生成）
+    "doneAt": "2026-08-19T07:00:00Z",      // 完成时间（status→done 时自动生成）
+    "quadrant": "q1"                       // 四象限：q1/q2/q3/q4（可选）
   }
 }
 
@@ -119,5 +120,6 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 - 移动节点会自动做防环校验（不能移到自己的后代下面）。
 - 删除节点会递归删除整棵子树。
 - 节点 `status` 只接受 `running` / `pending` / `done` / `context`。
+- 节点 `quadrant`（四象限，可选）只接受 `q1`（重要紧急）/ `q2`（重要不紧急）/ `q3`（不重要紧急）/ `q4`（不重要不紧急）；传空值表示清除。
 - 节点自动记录 `createdAt`（创建时间）和 `doneAt`（变为 done 的时间；取消 done 时自动清除）。
 - 前端加载项目时会自动按当前规则重新排版，因此 API 写入的坐标只是初始值，不必精确。
