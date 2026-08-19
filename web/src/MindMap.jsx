@@ -636,6 +636,16 @@ export default function MindMap() {
     setTodos(leafNodes);
   }, [nodes, edges]);
 
+  // 侧栏展开/收起后，画布尺寸变化，重新 fitView 保持节点居中
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      if (nodesRef.current.length > 0) {
+        flowRef.current?.fitView({ padding: 0.08, duration: 200, maxZoom: 1.3 });
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [showTodos]);
+
   // 初始化
   React.useEffect(() => {
     initProjects();
