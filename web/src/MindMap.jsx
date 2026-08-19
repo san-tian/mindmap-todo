@@ -211,7 +211,6 @@ function StatusIcon({ status }) {
 function CustomNode({ data, id }) {
   const [isEditing, setIsEditing] = React.useState(false);
   const [label, setLabel] = React.useState(data.label);
-  const [showHint, setShowHint] = React.useState(false);
   const inputRef = React.useRef(null);
 
   // 判断是否是根节点
@@ -226,7 +225,6 @@ function CustomNode({ data, id }) {
       const input = inputRef.current;
       input.focus();
       input.select();
-      setShowHint(true);
 
       const handleKeyDown = (e) => {
         // Ctrl/Cmd + Enter：创建子节点
@@ -270,7 +268,6 @@ function CustomNode({ data, id }) {
 
       return () => {
         input.removeEventListener('keydown', handleKeyDown);
-        setShowHint(false);
       };
     }
   }, [isEditing, id, data.label]);
@@ -307,12 +304,7 @@ function CustomNode({ data, id }) {
             )}
           </button>
           {isEditing ? (
-            <div className="node-edit-container" style={{ position: 'relative' }}>
-              {showHint && (
-                <div className="shortcut-hint">
-                  Enter: 保存 | Ctrl+Enter: 子节点 | Esc: 取消
-                </div>
-              )}
+            <div className="node-edit-container">
               <input
                 ref={inputRef}
                 type="text"
