@@ -224,6 +224,84 @@
   color: #1f2329;
 }
 
+.todo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.todo-header .todo-title {
+  margin: 0;
+}
+
+.todo-view-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.todo-view-switch button {
+  font-size: 12px;
+  padding: 2px 8px;
+  border: 1px solid #dee0e3;
+  border-radius: 4px;
+  background: white;
+  color: #646a73;
+  cursor: pointer;
+}
+
+.todo-view-switch button.active {
+  background: #3370ff;
+  border-color: #3370ff;
+  color: white;
+}
+
+.time-group {
+  margin-bottom: 14px;
+}
+
+.time-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #646a73;
+  margin: 0 0 6px 0;
+}
+
+.time-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.time-item:hover {
+  background: #f2f3f5;
+}
+
+.time-item-time {
+  font-size: 11px;
+  color: #9aa1a9;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-item .icon {
+  flex-shrink: 0;
+}
+
+.time-item-text {
+  color: #1f2329;
+  word-break: break-word;
+}
+
+.time-item-text.done-text {
+  color: #86909c;
+  text-decoration: line-through;
+}
+
 .todo-empty {
   color: #8f959e;
   font-size: 13px;
@@ -428,6 +506,16 @@
   opacity: 0.6;
 }
 
+.node-status-context {
+  background: transparent;
+  border: 1px dashed #c9cdd4;
+}
+
+.node-label-context {
+  color: #8f959e;
+  font-style: italic;
+}
+
 /* 拖拽时的目标节点高亮 */
 .node-drop-target {
   outline: 2px dashed #3370ff;
@@ -522,6 +610,10 @@
 
 .icon-check {
   color: #86909c;
+}
+
+.icon-info {
+  color: #8f959e;
 }
 
 .icon-sm {

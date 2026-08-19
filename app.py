@@ -245,7 +245,7 @@ def api_add_node(pid):
         body = request.get_json(silent=True) or {}
         label = (body.get('label') or '').strip() or '新任务'
         status = body.get('status') or 'pending'
-        if status not in ('running', 'pending', 'done'):
+        if status not in ('running', 'pending', 'done', 'context'):
             status = 'pending'
         parent_id = body.get('parentId')
 
@@ -305,7 +305,7 @@ def api_update_node(pid, nid):
 
         if 'label' in body:
             node['data']['label'] = (body['label'] or '').strip() or node['data'].get('label', '')
-        if body.get('status') in ('running', 'pending', 'done'):
+        if body.get('status') in ('running', 'pending', 'done', 'context'):
             prev = node['data'].get('status')
             if body['status'] == 'done' and prev != 'done':
                 node['data']['doneAt'] = _now()

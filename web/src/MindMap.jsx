@@ -11,7 +11,7 @@ import ReactFlow, {
   useEdgesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Plus, Save, Check, Circle, Play } from 'lucide-react';
+import { Plus, Save, Check, Circle, Play, Info } from 'lucide-react';
 import './MindMap.css';
 
 const formatTime = (d) => {
@@ -35,6 +35,14 @@ const localDateKey = (iso) => {
   if (isNaN(d.getTime())) return null;
   const pad = (x) => String(x).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+const timeOfDay = (iso) => {
+  if (!iso) return '--:--';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '--:--';
+  const pad = (x) => String(x).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
 // 全局状态管理器
@@ -73,8 +81,8 @@ class MindMapManager {
   onStatusToggle(nodeId) {
     const node = this.getNodes().find(n => n.id === nodeId);
     const current = node?.data?.status || 'pending';
-    // 按钮只做二态切换：running / pending 都视为"未完成"，点击 → done；done → pending
-    this.onStatusChange(nodeId, current === 'done' ? 'pending' : 'done');
+    // 按钮二态切换：done / context → pending；running / pending → done
+    this.onStatusChange(nodeId, (current === 'done' || current === 'context') ? 'pending' : 'done');
   }
 
   onAddChild(parentId) {
@@ -190,6 +198,15 @@ class MindMapManager {
 
 const manager = new MindMapManager();
 
+// 状态图标组件
+function StatusIcon({ status }) {
+  const s = status || 'pending';
+  if (s === 'running') return <Play className="icon icon-play" />;
+  if (s === 'done') return <Check className="icon icon-check" />;
+  if (s === 'context') return <Info className="icon icon-info" />;
+  return <Circle className="icon icon-circle" />;
+}
+
 // 自定义节点
 function CustomNode({ data, id }) {
   const [isEditing, setIsEditing] = React.useState(false);
@@ -283,6 +300,8 @@ function CustomNode({ data, id }) {
               <Play className="icon icon-play" />
             ) : status === 'done' ? (
               <Check className="icon icon-check" />
+            ) : status === 'context' ? (
+              <Info className="icon icon-info" />
             ) : (
               <Circle className="icon icon-circle" />
             )}
@@ -380,6 +399,7 @@ function TodoItem({ todo, statusKey, onSelect, onStatusChange, onLabelChange, on
         <option value="running">▶ 运行中</option>
         <option value="pending">○ 待办</option>
         <option value="done">✓ 已完成</option>
+        <option value="context">ℹ 上下文</option>
       </select>
       <div className="todo-item-body">
         {editing ? (
@@ -426,6 +446,7 @@ export default function MindMap() {
   const [currentProjectId, setCurrentProjectId] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [dragOverGroup, setDragOverGroup] = React.useState(null);
+  const [viewMode, setViewMode] = React.useState('status'); // status | time
   const [bgMode, setBgMode] = React.useState('white'); // white | dots | lines
   const bgModeLoadedRef = React.useRef(false);
 
@@ -563,6 +584,12 @@ export default function MindMap() {
         manager.onStatusChange(selectedNodeId, 'done');
         return;
       }
+      // c：上下文（项目描述，不计入 TODO）
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        manager.onStatusChange(selectedNodeId, 'context');
+        return;
+      }
 
       // Delete/Backspace：删除节点（根节点不允许删除）
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -605,7 +632,7 @@ export default function MindMap() {
   // 计算 TODO
   React.useEffect(() => {
     const parentIds = new Set(edges.map(e => e.source));
-    const leafNodes = nodes.filter(n => !parentIds.has(n.id) && !n.data?.isRoot);
+    const leafNodes = nodes.filter(n => !parentIds.has(n.id) && !n.data?.isRoot && n.data?.status !== 'context');
     setTodos(leafNodes);
   }, [nodes, edges]);
 
@@ -936,6 +963,32 @@ export default function MindMap() {
     return { created, done };
   }, [todos]);
 
+  // 时间视图：按“完成/创建”日期分组，倒序（今天→昨天→更早）
+  const timeGroups = React.useMemo(() => {
+    const now = new Date();
+    const pad = (x) => String(x).padStart(2, '0');
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const y = new Date(now);
+    y.setDate(now.getDate() - 1);
+    const yesterday = `${y.getFullYear()}-${pad(y.getMonth() + 1)}-${pad(y.getDate())}`;
+
+    const map = new Map();
+    todos.forEach(t => {
+      const status = t.data?.status || 'pending';
+      const iso = status === 'done' ? t.data?.doneAt : t.data?.createdAt;
+      const key = localDateKey(iso);
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(t);
+    });
+    const keys = Array.from(map.keys()).sort().reverse();
+    return keys.map(key => ({
+      key,
+      label: key === today ? '今天' : key === yesterday ? '昨天' : key.slice(5).replace('-', '/'),
+      items: map.get(key),
+    }));
+  }, [todos]);
+
   const nodesForRender = React.useMemo(() => {
     // 计算每个节点的层级（根=0，其直接子级=1，以此类推）
     const parentOf = new Map();
@@ -1089,54 +1142,88 @@ export default function MindMap() {
 
         {showTodos && (
           <div className="todo-sidebar">
-            <h2 className="todo-title">任务列表</h2>
-            <p className="todo-today">今日新建 {todayStats.created} · 完成 {todayStats.done}</p>
-            {todos.length === 0 ? (
-              <p className="todo-empty">暂无任务</p>
-            ) : (
-              <div className="todo-groups">
-                {[
-                  { key: 'running', title: '运行中', icon: <Play className="icon-sm todo-icon" /> },
-                  { key: 'pending', title: '待办', icon: <Circle className="icon-sm todo-icon" /> },
-                  { key: 'done', title: '已完成', icon: <Check className="icon-sm todo-icon" /> },
-                ].map(group => (
-                  <div
-                    key={group.key}
-                    className={`todo-group todo-group-${group.key} ${dragOverGroup === group.key ? 'todo-group-dragover' : ''}`}
-                    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
-                    onDragEnter={(e) => { e.preventDefault(); setDragOverGroup(group.key); }}
-                    onDragLeave={(e) => { if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return; setDragOverGroup(null); }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      const id = e.dataTransfer.getData('text/plain');
-                      if (id) manager.onStatusChange(id, group.key);
-                      setDragOverGroup(null);
-                    }}
-                  >
-                    <h3 className="todo-group-title">
-                      {group.icon}
-                      {group.title}
-                      <span className="todo-group-count">{groupedTodos[group.key].length}</span>
-                    </h3>
-                    {groupedTodos[group.key].length === 0 ? (
-                      <p className="todo-group-empty">暂无（拖入任务到此分组）</p>
-                    ) : (
-                      <div className="todo-list">
-                        {groupedTodos[group.key].map(todo => (
-                          <TodoItem
-                            key={todo.id}
-                            todo={todo}
-                            statusKey={group.key}
-                            onSelect={selectNode}
-                            onStatusChange={(id, status) => manager.onStatusChange(id, status)}
-                            onLabelChange={(id, label) => manager.onLabelChange(id, label)}
-                            onDragEnd={() => setDragOverGroup(null)}
-                          />
-                        ))}
+            <div className="todo-header">
+              <h2 className="todo-title">任务列表</h2>
+              <div className="todo-view-switch">
+                <button className={viewMode === 'status' ? 'active' : ''} onClick={() => setViewMode('status')}>状态</button>
+                <button className={viewMode === 'time' ? 'active' : ''} onClick={() => setViewMode('time')}>时间</button>
+              </div>
+            </div>
+
+            {viewMode === 'status' ? (
+              <>
+                <p className="todo-today">今日新建 {todayStats.created} · 完成 {todayStats.done}</p>
+                {todos.length === 0 ? (
+                  <p className="todo-empty">暂无任务</p>
+                ) : (
+                  <div className="todo-groups">
+                    {[
+                      { key: 'running', title: '运行中', icon: <Play className="icon-sm todo-icon" /> },
+                      { key: 'pending', title: '待办', icon: <Circle className="icon-sm todo-icon" /> },
+                      { key: 'done', title: '已完成', icon: <Check className="icon-sm todo-icon" /> },
+                    ].map(group => (
+                      <div
+                        key={group.key}
+                        className={`todo-group todo-group-${group.key} ${dragOverGroup === group.key ? 'todo-group-dragover' : ''}`}
+                        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                        onDragEnter={(e) => { e.preventDefault(); setDragOverGroup(group.key); }}
+                        onDragLeave={(e) => { if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return; setDragOverGroup(null); }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const id = e.dataTransfer.getData('text/plain');
+                          if (id) manager.onStatusChange(id, group.key);
+                          setDragOverGroup(null);
+                        }}
+                      >
+                        <h3 className="todo-group-title">
+                          {group.icon}
+                          {group.title}
+                          <span className="todo-group-count">{groupedTodos[group.key].length}</span>
+                        </h3>
+                        {groupedTodos[group.key].length === 0 ? (
+                          <p className="todo-group-empty">暂无（拖入任务到此分组）</p>
+                        ) : (
+                          <div className="todo-list">
+                            {groupedTodos[group.key].map(todo => (
+                              <TodoItem
+                                key={todo.id}
+                                todo={todo}
+                                statusKey={group.key}
+                                onSelect={selectNode}
+                                onStatusChange={(id, status) => manager.onStatusChange(id, status)}
+                                onLabelChange={(id, label) => manager.onLabelChange(id, label)}
+                                onDragEnd={() => setDragOverGroup(null)}
+                              />
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
+                    ))}
                   </div>
-                ))}
+                )}
+              </>
+            ) : (
+              <div className="time-groups">
+                {timeGroups.length === 0 ? (
+                  <p className="todo-empty">暂无时间记录</p>
+                ) : (
+                  timeGroups.map(g => (
+                    <div key={g.key} className="time-group">
+                      <h3 className="time-group-title">{g.label}</h3>
+                      {g.items.map(t => (
+                        <div key={t.id} className="time-item" onClick={() => selectNode(t.id)}>
+                          <span className="time-item-time">
+                            {timeOfDay(t.data?.status === 'done' ? t.data?.doneAt : t.data?.createdAt)}
+                          </span>
+                          <StatusIcon status={t.data?.status} />
+                          <span className={`time-item-text ${t.data?.status === 'done' ? 'done-text' : ''}`}>
+                            {t.data?.label || '未命名任务'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </div>
