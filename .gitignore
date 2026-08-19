@@ -1,0 +1,52 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Flask
+instance/
+.env
+.flaskenv
+
+# Data
+data/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+web/dist/
+web/build/
+
+# 本地测试与脚本（不入库）
+/test-browser.js
+/test-edges.js
+/test-error.js
+/check-errors.js
+/test.html
+/manual-test.md
+/test-screenshots/
+/package.json
+/package-lock.json
+

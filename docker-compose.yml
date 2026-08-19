@@ -1,0 +1,13 @@
+services:
+  mindmap-todo:
+    build: .
+    image: mindmap-todo:latest
+    container_name: mindmap-todo
+    ports:
+      - "23456:5000"   # 宿主机 23456 -> 容器 5000，可自行修改左侧端口
+    volumes:
+      - ./data:/app/data   # 数据持久化到宿主机 data 目录
+    environment:
+      - PORT=5000
+      - FLASK_DEBUG=0
+    restart: unless-stopped

@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# 前端依赖与构建产物（构建阶段会重新安装/构建）
+node_modules/
+web/node_modules/
+web/dist/
+web/build/
+
+# 数据（通过卷挂载，不打包进镜像）
+data/
+
+# 测试与文档
+test.html
+test-*.js
+check-errors.js
+test-screenshots/
+manual-test.md
+*.md
+
+# 环境与密钥
+.env
+*.log
