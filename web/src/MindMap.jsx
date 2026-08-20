@@ -485,6 +485,8 @@ export default function MindMap() {
   const loadedRef = React.useRef(false);
   const saveTimerRef = React.useRef(null);
   const currentProjectIdRef = React.useRef(null);
+  // 首次布局用了估算尺寸时置 true；等 React Flow 实测完全部节点后重排一次
+  const estimatePendingRef = React.useRef(false);
 
   React.useEffect(() => {
     nodesRef.current = nodes;
@@ -732,16 +734,35 @@ export default function MindMap() {
         .sort((a, b) => (a.position?.y || 0) - (b.position?.y || 0));
 
       const H_GAP = 36;   // 父节点右边缘到子节点左边缘的水平间距
-      const V_GAP = 6;    // 兄弟节点垂直间距
-      const ROOT_GAP = 24;
+      const V_GAP = 5;    // 兄弟节点垂直间距
+      const ROOT_GAP = 20;
       const START_X = 24;
       const START_Y = 28;
 
-      // 节点尺寸：优先用已测量的实际尺寸，否则按文字长度估算
-      const nodeW = (n) => (n.width && n.width > 0)
-        ? n.width
-        : Math.max(60, Math.min(220, (n.data?.label?.length || 2) * 13 + 36));
-      const nodeH = (n) => (n.height && n.height > 0) ? n.height : 40;
+      // 节点尺寸：优先用已测量的实际尺寸；未测量时按字宽估算（单行 ≈29px，而非固定 40px）
+      // 避免「加载后首次布局赶在测量前执行 → 整棵树按 40px 块高排布 → 竖直方向虚胖」
+      let usedEstimate = false;
+      const estSize = (n) => {
+        const label = n.data?.label || '';
+        let units = 0;
+        for (const ch of label) {
+          units += ch.charCodeAt(0) > 0x2E7F ? 13 : 7.5; // 全角 13px，半角 7.5px
+        }
+        const w = Math.max(60, Math.min(220, units + 20));
+        const lines = Math.max(1, Math.ceil(units / 200)); // 220px 上限 - 20px 内边距 ≈ 每行容纳宽度
+        const lineH = n.data?.isRoot ? 18 : 17;            // 13px 字号 × 1.3 行高
+        return { w, h: 10 + lines * lineH + 2 };
+      };
+      const nodeW = (n) => {
+        if (n.width > 0) return n.width;
+        usedEstimate = true;
+        return estSize(n).w;
+      };
+      const nodeH = (n) => {
+        if (n.height > 0) return n.height;
+        usedEstimate = true;
+        return estSize(n).h;
+      };
 
       const layoutNode = (nodeId, x, y) => {
         const node = nodeMap.get(nodeId);
@@ -776,6 +797,9 @@ export default function MindMap() {
         cy += rh + (i < rootNodes.length - 1 ? ROOT_GAP : 0);
       });
 
+      // 本次布局用了估算尺寸：等 React Flow 实测完后再重排一次（见下方 effect）
+      if (usedEstimate) estimatePendingRef.current = true;
+
       return Array.from(nodeMap.values());
     });
 
@@ -790,6 +814,16 @@ export default function MindMap() {
   React.useEffect(() => {
     manager.autoLayout = autoLayout;
   }, [autoLayout]);
+
+  // autoLayout 用了估算尺寸 → 等 React Flow 把所有节点实测完（width/height 就位）后，
+  // 按真实尺寸紧凑重排一次（只补一次，不会循环）
+  React.useEffect(() => {
+    if (!estimatePendingRef.current || nodes.length === 0) return;
+    if (nodes.every(n => n.width > 0 && n.height > 0)) {
+      estimatePendingRef.current = false;
+      autoLayout(false);
+    }
+  }, [nodes, autoLayout]);
 
   const onConnect = React.useCallback((params) => {
     setEdges(eds => [...eds, {
