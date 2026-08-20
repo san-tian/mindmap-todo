@@ -13,6 +13,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { Plus, Save, Check, Circle, Play, Info, Clock, Pause } from 'lucide-react';
 import './MindMap.css';
+import { storage } from './storage';
 
 const formatTime = (d) => {
   const hh = String(d.getHours()).padStart(2, '0');
@@ -493,8 +494,7 @@ export default function MindMap() {
   // 加载背景设置（持久化到后端）
   React.useEffect(() => {
     let cancelled = false;
-    fetch('/api/settings')
-      .then(r => r.json())
+    storage.getSettings()
       .then(res => {
         if (cancelled) return;
         if (res.success && res.settings?.bgMode) {
@@ -514,11 +514,7 @@ export default function MindMap() {
   // 背景变化时保存到后端
   React.useEffect(() => {
     if (!bgModeLoadedRef.current) return;
-    fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bgMode }),
-    }).catch(() => {});
+    storage.saveSettings({ bgMode }).catch(() => {});
   }, [bgMode]);
 
   // 自动保存到后端（防抖 1200ms）
@@ -537,12 +533,7 @@ export default function MindMap() {
           quadrant: n.data.quadrant,
         },
       }));
-      const response = await fetch(`/api/projects/${pid}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodes: nodesToSave, edges: edgesRef.current }),
-      });
-      const result = await response.json();
+      const result = await storage.saveProject(pid, nodesToSave, edgesRef.current);
       if (result.success) {
         setSaveStatus('saved');
         setLastSavedAt(new Date());
@@ -905,8 +896,7 @@ export default function MindMap() {
     setCurrentProjectId(id);
     setLoading(true);
     try {
-      const response = await fetch(`/api/projects/${id}`);
-      const result = await response.json();
+      const result = await storage.getProject(id);
       if (result.success && result.project) {
         applyProjectData(result.project);
       }
@@ -922,19 +912,13 @@ export default function MindMap() {
   };
 
   const fetchProjects = async () => {
-    const response = await fetch('/api/projects');
-    const result = await response.json();
+    const result = await storage.listProjects();
     let list = (result.projects || []).map(p => ({
       id: p.id, name: p.name, updatedAt: p.updatedAt,
     }));
     if (list.length === 0) {
       // 没有任何项目时自动创建一个默认项目
-      const c = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: '我的项目' }),
-      });
-      const cr = await c.json();
+      const cr = await storage.createProject('我的项目');
       if (cr.success) {
         const p = cr.project;
         list = [{ id: p.id, name: p.name, updatedAt: p.updatedAt }];
@@ -968,12 +952,7 @@ export default function MindMap() {
     if (input === null) return;
     const name = input.trim() || '新项目';
     await doSave();
-    const response = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    const result = await response.json();
+    const result = await storage.createProject(name);
     if (result.success) {
       const np = { id: result.project.id, name: result.project.name, updatedAt: result.project.updatedAt };
       setProjects(prev => [...prev, np]);
@@ -989,12 +968,7 @@ export default function MindMap() {
     if (input === null) return;
     const name = input.trim();
     if (!name) return;
-    const response = await fetch(`/api/projects/${pid}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    const result = await response.json();
+    const result = await storage.renameProject(pid, name);
     if (result.success) {
       setProjects(prev => prev.map(p => (p.id === pid ? { ...p, name } : p)));
       // 同步根节点标题为项目名
@@ -1006,7 +980,7 @@ export default function MindMap() {
     const pid = currentProjectIdRef.current;
     if (!pid) return;
     if (!window.confirm('确定删除当前项目？此操作不可恢复。')) return;
-    await fetch(`/api/projects/${pid}`, { method: 'DELETE' });
+    await storage.deleteProject(pid);
     const list = await fetchProjects();
     setProjects(list);
     if (list[0]) {
