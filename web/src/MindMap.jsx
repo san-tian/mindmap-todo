@@ -46,19 +46,19 @@ const timeOfDay = (iso) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-// 四象限（艾森豪威尔矩阵）
+// 四象限（艾森豪威尔矩阵）——低饱和配色，与蓝白主题一致
 const QUADRANTS = {
-  q1: { label: '重要紧急', color: '#f53f3f' },
-  q2: { label: '重要不紧急', color: '#3370ff' },
-  q3: { label: '不重要紧急', color: '#ff8800' },
-  q4: { label: '不重要不紧急', color: '#86909c' },
+  q1: { label: '重要紧急', color: '#e11d48' },
+  q2: { label: '重要不紧急', color: '#2563eb' },
+  q3: { label: '不重要紧急', color: '#ea580c' },
+  q4: { label: '不重要不紧急', color: '#94a3b8' },
 };
 const QUADRANT_ORDER = [
   { key: 'q1', label: QUADRANTS.q1.label, color: QUADRANTS.q1.color },
   { key: 'q2', label: QUADRANTS.q2.label, color: QUADRANTS.q2.color },
   { key: 'q3', label: QUADRANTS.q3.label, color: QUADRANTS.q3.color },
   { key: 'q4', label: QUADRANTS.q4.label, color: QUADRANTS.q4.color },
-  { key: 'none', label: '未分类', color: '#c9cdd4' },
+  { key: 'none', label: '未分类', color: '#cbd5e1' },
 ];
 
 // 全局状态管理器
@@ -475,7 +475,7 @@ export default function MindMap() {
   const [dragOverGroup, setDragOverGroup] = React.useState(null);
   const [dragOverQuadrant, setDragOverQuadrant] = React.useState(null);
   const [viewMode, setViewMode] = React.useState('status'); // status | time | quadrant
-  const [bgMode, setBgMode] = React.useState('white'); // white | dots | lines
+  const [bgMode, setBgMode] = React.useState('dots'); // dots | lines | white（点阵为默认，白板感）
   const bgModeLoadedRef = React.useRef(false);
 
   // 使用 ref 存储最新状态
@@ -498,7 +498,8 @@ export default function MindMap() {
       .then(res => {
         if (cancelled) return;
         if (res.success && res.settings?.bgMode) {
-          setBgMode(res.settings.bgMode);
+          // 旧配置里保存的 'white' 迁移为 'dots'：新版默认白板点阵背景
+          setBgMode(res.settings.bgMode === 'white' ? 'dots' : res.settings.bgMode);
         }
       })
       .catch(() => {})
@@ -1073,6 +1074,16 @@ export default function MindMap() {
     }));
   }, [nodes, edges, dropTargetId, selectedNodeId]);
 
+  // 边跟随源节点状态着色：running 绿色流动、done 淡化、其余冷灰蓝
+  const edgesForRender = React.useMemo(() => {
+    const statusById = new Map(nodes.map(n => [n.id, n.data?.status || 'pending']));
+    return edges.map(e => {
+      const s = statusById.get(e.source) || 'pending';
+      const color = s === 'running' ? '#10b981' : s === 'done' ? '#d9dfeb' : '#c3cddd';
+      return { ...e, className: `edge-status-${s}`, markerEnd: { ...e.markerEnd, color } };
+    });
+  }, [nodes, edges]);
+
   return (
     <div className="app">
       <div className="toolbar">
@@ -1159,7 +1170,7 @@ export default function MindMap() {
           ) : (
             <ReactFlow
               nodes={nodesForRender}
-              edges={edges}
+              edges={edgesForRender}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
@@ -1176,7 +1187,7 @@ export default function MindMap() {
               nodeTypes={nodeTypes}
               nodesDraggable={true}
               nodesConnectable={false}
-              defaultMarkerColor="#b9c2d0"
+              defaultMarkerColor="#c3cddd"
               elementsSelectable={true}
               deleteKeyCode={null}
               zoomOnDoubleClick={false}
@@ -1190,9 +1201,9 @@ export default function MindMap() {
               {bgMode !== 'white' && (
                 <Background
                   variant={bgMode === 'lines' ? 'lines' : 'dots'}
-                  gap={14}
-                  size={1}
-                  color="#e3e5e8"
+                  gap={18}
+                  size={1.3}
+                  color="#dfe4ee"
                 />
               )}
             </ReactFlow>

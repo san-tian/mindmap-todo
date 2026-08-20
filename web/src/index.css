@@ -10,6 +10,11 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+}
+
+::selection {
+  background: rgba(37, 99, 235, 0.18);
 }
 
 #root {
