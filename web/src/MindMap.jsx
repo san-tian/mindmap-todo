@@ -308,24 +308,10 @@ function CustomNode({ data, id }) {
 
   const status = data.status || 'pending';
   const isLevel1 = data.level === 1;
-  // 双侧布局：左侧子树连线方向镜像（target 在右、source 在左）；根节点两侧都可出边
-  const sideLeft = !isRoot && data.side === 'l';
-
-  const handles = isRoot ? (
-    <>
-      <Handle type="source" position={Position.Left} id="s-left" className="node-handle" />
-      <Handle type="source" position={Position.Right} id="s-right" className="node-handle" />
-    </>
-  ) : (
-    <>
-      <Handle type="target" position={sideLeft ? Position.Right : Position.Left} className="node-handle" />
-      <Handle type="source" position={sideLeft ? Position.Left : Position.Right} className="node-handle" />
-    </>
-  );
 
   return (
     <>
-      {handles}
+      <Handle type="target" position={Position.Left} className="node-handle" />
       <div
         className={`node node-status-${status} ${isRoot ? 'node-root' : ''} ${isLevel1 ? 'node-level-1' : ''} ${data.dropTarget ? 'node-drop-target' : ''} ${data.highlight ? 'node-highlight' : ''}`}
         onDoubleClick={() => {
@@ -381,6 +367,7 @@ function CustomNode({ data, id }) {
           )}
         </div>
       </div>
+      <Handle type="source" position={Position.Right} className="node-handle" />
     </>
   );
 }
@@ -724,7 +711,7 @@ export default function MindMap() {
     initProjects();
   }, []);
 
-  // 自动布局函数：经典思维导图双侧结构——根居中，子分支左右分列（高度平衡切分）
+  // 自动布局函数：统一右侧展开的思维导图树（父节点垂直居中于子树）
   const autoLayout = React.useCallback((fitViewAfter = true) => {
     setNodes(nds => {
       const nodeMap = new Map(nds.map(n => [n.id, { ...n }]));
@@ -777,29 +764,13 @@ export default function MindMap() {
         return estSize(n).h;
       };
 
-      // 子树总高度（用于根节点切分左右两侧，使两侧高度尽量平衡）
-      const memo = new Map();
-      const subtreeH = (id) => {
-        if (memo.has(id)) return memo.get(id);
-        const node = nodeMap.get(id);
-        if (!node) return 0;
-        const kids = childrenMap.get(id) || [];
-        let total = 0;
-        kids.forEach(kid => { total += subtreeH(kid) + V_GAP; });
-        if (kids.length > 0) total -= V_GAP;
-        const h = Math.max(total, nodeH(node));
-        memo.set(id, h);
-        return h;
-      };
-
-      // 右侧子树：父 → 右展开（默认方向）
-      const layoutRight = (nodeId, x, y) => {
+      // 统一右侧展开：父节点垂直居中于子树，子节点紧贴父右侧
+      const layoutNode = (nodeId, x, y) => {
         const node = nodeMap.get(nodeId);
         if (!node) return 0;
         const w = nodeW(node);
         const h = nodeH(node);
         node.position = { x, y };
-        node.data = { ...node.data, side: 'r' };
 
         const kids = childrenMap.get(nodeId) || [];
         if (kids.length === 0) return h;
@@ -808,95 +779,18 @@ export default function MindMap() {
         let cy = y;
         let totalH = 0;
         kids.forEach(kid => {
-          const kh = layoutRight(kid, childX, cy);
+          const kh = layoutNode(kid, childX, cy);
           cy += kh + V_GAP;
           totalH += kh + V_GAP;
         });
         totalH -= V_GAP;
         if (totalH > h) node.position.y = y + (totalH - h) / 2;
         return Math.max(totalH, h);
-      };
-
-      // 左侧子树：父 → 左展开（镜像，节点右边缘对齐 rightEdge）
-      const layoutLeft = (nodeId, rightEdge, y) => {
-        const node = nodeMap.get(nodeId);
-        if (!node) return 0;
-        const w = nodeW(node);
-        const h = nodeH(node);
-        node.position = { x: rightEdge - w, y };
-        node.data = { ...node.data, side: 'l' };
-
-        const kids = childrenMap.get(nodeId) || [];
-        if (kids.length === 0) return h;
-
-        const childRightEdge = rightEdge - w - H_GAP;
-        let cy = y;
-        let totalH = 0;
-        kids.forEach(kid => {
-          const kh = layoutLeft(kid, childRightEdge, cy);
-          cy += kh + V_GAP;
-          totalH += kh + V_GAP;
-        });
-        totalH -= V_GAP;
-        if (totalH > h) node.position.y = y + (totalH - h) / 2;
-        return Math.max(totalH, h);
-      };
-
-      // 双侧布局：根的子分支按高度前缀和找最优切分点，一半放左、一半放右
-      // （经典思维导图结构：高度减半、宽度翻倍，适配横屏）
-      const layoutRoot = (root, startY) => {
-        const rootW = nodeW(root);
-        const rootH = nodeH(root);
-        const kids = childrenMap.get(root.id) || [];
-
-        // 单分支/无分支：维持纯右侧
-        if (kids.length < 2) {
-          root.data = { ...root.data, side: 'r' };
-          return layoutRight(root.id, START_X, startY);
-        }
-
-        const hs = kids.map(kid => subtreeH(kid));
-        const totalAll = hs.reduce((a, b) => a + b, 0) + V_GAP * (kids.length - 1);
-
-        // 找切分点 k（左 = kids[0..k)，右 = kids[k..]），使两侧高度差最小；保持原阅读顺序
-        let bestK = kids.length - 1;
-        let bestDiff = Infinity;
-        let prefix = 0;
-        for (let k = 1; k < kids.length; k++) {
-          prefix += hs[k - 1] + (k > 1 ? V_GAP : 0);
-          const rightH = totalAll - prefix - V_GAP;
-          const diff = Math.abs(prefix - rightH);
-          if (diff < bestDiff) { bestDiff = diff; bestK = k; }
-        }
-
-        const leftKids = kids.slice(0, bestK);
-        const rightKids = kids.slice(bestK);
-        const leftH = leftKids.reduce((a, _, i) => a + hs[i] + (i > 0 ? V_GAP : 0), 0);
-        const rightH = rightKids.reduce((a, _, i) => a + hs[bestK + i] + (i > 0 ? V_GAP : 0), 0);
-        const maxH = Math.max(leftH, rightH, rootH);
-
-        // 根节点垂直居中于两侧之间
-        root.position = { x: START_X, y: startY + (maxH - rootH) / 2 };
-        root.data = { ...root.data, side: 'r' };
-
-        let cy = startY;
-        leftKids.forEach((kid, i) => {
-          layoutLeft(kid, START_X - H_GAP, cy);
-          cy += hs[i] + V_GAP;
-        });
-
-        cy = startY;
-        rightKids.forEach((kid, i) => {
-          layoutRight(kid, START_X + rootW + H_GAP, cy);
-          cy += hs[bestK + i] + V_GAP;
-        });
-
-        return maxH;
       };
 
       let cy = START_Y;
       rootNodes.forEach((root, i) => {
-        const rh = layoutRoot(root, cy);
+        const rh = layoutNode(root.id, START_X, cy);
         cy += rh + (i < rootNodes.length - 1 ? ROOT_GAP : 0);
       });
 
@@ -1211,22 +1105,13 @@ export default function MindMap() {
     }));
   }, [nodes, edges, dropTargetId, selectedNodeId]);
 
-  // 边跟随源节点状态着色；根节点出边按目标方位选 handle（双侧布局下根左右都能出线）
+  // 边跟随源节点状态着色：running 绿色流动、done 淡化、其余冷灰蓝
   const edgesForRender = React.useMemo(() => {
-    const nodeById = new Map(nodes.map(n => [n.id, n]));
     const statusById = new Map(nodes.map(n => [n.id, n.data?.status || 'pending']));
     return edges.map(e => {
       const s = statusById.get(e.source) || 'pending';
       const color = s === 'running' ? '#10b981' : s === 'done' ? '#d9dfeb' : '#c3cddd';
-      const src = nodeById.get(e.source);
-      const tgt = nodeById.get(e.target);
-      let sourceHandle;
-      if (src?.data?.isRoot && tgt) {
-        const srcCx = src.position.x + (src.width || 100) / 2;
-        const tgtCx = tgt.position.x + (tgt.width || 100) / 2;
-        sourceHandle = tgtCx < srcCx ? 's-left' : 's-right';
-      }
-      return { ...e, className: `edge-status-${s}`, markerEnd: { ...e.markerEnd, color }, sourceHandle };
+      return { ...e, className: `edge-status-${s}`, markerEnd: { ...e.markerEnd, color } };
     });
   }, [nodes, edges]);
 
