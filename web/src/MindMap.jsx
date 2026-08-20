@@ -75,6 +75,8 @@ class MindMapManager {
     this.setNodes(nds => nds.map(n =>
       n.id === nodeId ? { ...n, data: { ...n.data, label: newLabel } } : n
     ));
+    // 文字变化会改变节点高度，等重新测量后再重排（不 fitView，避免视野跳动）
+    setTimeout(() => this.autoLayout?.(false), 300);
   }
 
   onStatusChange(nodeId, status) {
