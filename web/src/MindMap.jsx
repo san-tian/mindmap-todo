@@ -477,6 +477,13 @@ export default function MindMap() {
   const [viewMode, setViewMode] = React.useState('status'); // status | time | quadrant
   const [bgMode, setBgMode] = React.useState('dots'); // dots | lines | white（点阵为默认，白板感）
   const bgModeLoadedRef = React.useRef(false);
+  // 布局模式：compact = 轮廓打包（子树互相咬合利用空隙）；standard = 矩形堆叠
+  const [layoutMode, setLayoutMode] = React.useState('compact');
+  const layoutModeRef = React.useRef('compact');
+
+  React.useEffect(() => {
+    layoutModeRef.current = layoutMode;
+  }, [layoutMode]);
 
   // 使用 ref 存储最新状态
   const nodesRef = React.useRef([]);
@@ -499,9 +506,14 @@ export default function MindMap() {
     storage.getSettings()
       .then(res => {
         if (cancelled) return;
-        if (res.success && res.settings?.bgMode) {
-          // 旧配置里保存的 'white' 迁移为 'dots'：新版默认白板点阵背景
-          setBgMode(res.settings.bgMode === 'white' ? 'dots' : res.settings.bgMode);
+        if (res.success && res.settings) {
+          if (res.settings.bgMode) {
+            // 旧配置里保存的 'white' 迁移为 'dots'：新版默认白板点阵背景
+            setBgMode(res.settings.bgMode === 'white' ? 'dots' : res.settings.bgMode);
+          }
+          if (res.settings.layoutMode) {
+            setLayoutMode(res.settings.layoutMode === 'standard' ? 'standard' : 'compact');
+          }
         }
       })
       .catch(() => {})
@@ -517,8 +529,14 @@ export default function MindMap() {
   // 背景变化时保存到后端
   React.useEffect(() => {
     if (!bgModeLoadedRef.current) return;
-    storage.saveSettings({ bgMode }).catch(() => {});
-  }, [bgMode]);
+    storage.saveSettings({ bgMode, layoutMode }).catch(() => {});
+  }, [bgMode, layoutMode]);
+
+  // 手动切换布局模式时重新排版（设置加载阶段不触发）
+  React.useEffect(() => {
+    if (!bgModeLoadedRef.current) return;
+    manager.autoLayout?.();
+  }, [layoutMode]);
 
   // 自动保存到后端（防抖 1200ms）
   const doSave = React.useCallback(async () => {
@@ -822,6 +840,68 @@ export default function MindMap() {
         return w;
       };
 
+      const compact = layoutModeRef.current === 'compact';
+
+      // —— 紧凑模式：子树轮廓打包（内容绝不重叠，但利用相邻子树的阶梯空隙）——
+      const subtreeRectsAbs = (id) => {
+        const out = [];
+        const walk = (nid) => {
+          const n = nodeMap.get(nid);
+          if (!n) return;
+          out.push({ x: n.position.x, y: n.position.y, w: nodeW(n), h: nodeH(n) });
+          (childrenMap.get(nid) || []).forEach(walk);
+        };
+        walk(id);
+        return out;
+      };
+      const shiftSubtreeY = (id, dy) => {
+        const n = nodeMap.get(id);
+        if (!n) return;
+        n.position.y += dy;
+        (childrenMap.get(id) || []).forEach(k => shiftSubtreeY(k, dy));
+      };
+      // 把 rects 整体下移的最小量：对所有 x 方向有交叠的矩形对，保证 a 底 + sep <= b 顶
+      const minShiftY = (placed, rects, sep) => {
+        let dy = 0;
+        for (const a of placed) {
+          for (const b of rects) {
+            if (a.x < b.x + b.w && b.x < a.x + a.w) {
+              dy = Math.max(dy, a.y + a.h + sep - b.y);
+            }
+          }
+        }
+        return dy;
+      };
+      // 紧凑版递归布局：子节点从基准线开始逐个“落最低点”打包，父节点居中于子内容
+      const layoutPacked = (nodeId, x, baseY) => {
+        const node = nodeMap.get(nodeId);
+        if (!node) return { top: baseY, bottom: baseY };
+        const w = nodeW(node);
+        const h = nodeH(node);
+        node.position = { x, y: baseY };
+        const kids = childrenMap.get(nodeId) || [];
+        if (kids.length === 0) return { top: baseY, bottom: baseY + h };
+
+        const childX = x + w + H_GAP;
+        const placed = [];
+        let top = Infinity, bottom = -Infinity;
+        kids.forEach(kid => {
+          const r = layoutPacked(kid, childX, baseY);
+          const rects = subtreeRectsAbs(kid);
+          const dy = minShiftY(placed, rects, V_GAP);
+          if (dy > 0) {
+            shiftSubtreeY(kid, dy);
+            r.top += dy; r.bottom += dy;
+          }
+          placed.push(...subtreeRectsAbs(kid));
+          top = Math.min(top, r.top);
+          bottom = Math.max(bottom, r.bottom);
+        });
+        // 父节点垂直居中于子内容包围盒
+        node.position.y = (top + bottom) / 2 - h / 2;
+        return { top: Math.min(top, node.position.y), bottom: Math.max(bottom, node.position.y + h) };
+      };
+
       // 布局一个根：分支少 → 单列；分支多 → 选宽高比最贴近屏幕的列数分列铺宽
       const layoutRootBlock = (root, startY) => {
         const rootW = nodeW(root);
@@ -829,6 +909,10 @@ export default function MindMap() {
         const kids = childrenMap.get(root.id) || [];
 
         if (kids.length <= 1) {
+          if (compact) {
+            const r = layoutPacked(root.id, START_X, startY);
+            return r.bottom - startY;
+          }
           return layoutNode(root.id, START_X, startY);
         }
 
@@ -882,6 +966,10 @@ export default function MindMap() {
         chosen = splitCols(chosenN);
 
         if (chosenN <= 1) {
+          if (compact) {
+            const r = layoutPacked(root.id, START_X, startY);
+            return r.bottom - startY;
+          }
           return layoutNode(root.id, START_X, startY);
         }
 
@@ -894,7 +982,29 @@ export default function MindMap() {
           x += w + COL_GAP;
         });
 
-        // 布局各列（列内自上而下堆叠，每个子树整体向右展开）
+        // 布局各列（列内自上而下堆叠；紧凑模式下相邻分支轮廓咬合）
+        if (compact) {
+          const BRANCH_GAP = 16; // 主分支间距稍大，保持可读
+          let blockTop = Infinity, blockBottom = -Infinity;
+          chosen.cols.forEach((col, ci) => {
+            const placed = [];
+            col.forEach(kid => {
+              const r = layoutPacked(kid, colX[ci], startY);
+              const rects = subtreeRectsAbs(kid);
+              const dy = minShiftY(placed, rects, BRANCH_GAP);
+              if (dy > 0) {
+                shiftSubtreeY(kid, dy);
+                r.top += dy; r.bottom += dy;
+              }
+              placed.push(...subtreeRectsAbs(kid));
+              blockTop = Math.min(blockTop, r.top);
+              blockBottom = Math.max(blockBottom, r.bottom);
+            });
+          });
+          root.position = { x: START_X, y: (blockTop + blockBottom) / 2 - rootH / 2 };
+          return blockBottom - startY;
+        }
+
         let maxColH = 0;
         chosen.cols.forEach((col, ci) => {
           let cy = startY;
@@ -1277,6 +1387,15 @@ export default function MindMap() {
             <option value="white">纯白背景</option>
             <option value="dots">点阵背景</option>
             <option value="lines">网格背景</option>
+          </select>
+          <select
+            className="project-select bg-select"
+            value={layoutMode}
+            onChange={(e) => setLayoutMode(e.target.value)}
+            title="布局模式：紧凑=子树轮廓互相咬合利用空隙；标准=矩形堆叠"
+          >
+            <option value="compact">紧凑布局</option>
+            <option value="standard">标准布局</option>
           </select>
           <button onClick={doSave} className="btn btn-primary" disabled={saveStatus === 'saving'}>
             <Save className="icon-sm" />
