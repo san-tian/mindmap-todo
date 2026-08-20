@@ -1,10 +1,8 @@
 # 思维导图 TODO
 
+[![在线试用](https://img.shields.io/badge/在线试用-立即体验-3370ff?style=flat-square)](https://san-tian.github.io/mindmap-todo/)
+
 一个基于思维导图的任务管理应用，通过可视化的树状结构组织和跟踪工作进度。
-
-## 在线试用
-
-无需部署，直接体验（数据保存在你浏览器的 localStorage）：https://san-tian.github.io/mindmap-todo/
 
 ## 预览
 
