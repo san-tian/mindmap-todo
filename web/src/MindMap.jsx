@@ -711,7 +711,7 @@ export default function MindMap() {
     initProjects();
   }, []);
 
-  // 自动布局函数：统一右侧展开的思维导图树（父节点垂直居中于子树）
+  // 自动布局函数：分支统一向右展开；整树高度超过一屏时，一级分支自动分列铺宽（每列仍向右生长）
   const autoLayout = React.useCallback((fitViewAfter = true) => {
     setNodes(nds => {
       const nodeMap = new Map(nds.map(n => [n.id, { ...n }]));
@@ -788,9 +788,131 @@ export default function MindMap() {
         return Math.max(totalH, h);
       };
 
+      // —— 分列布局（解决“叉高叉窄”）：一级分支纵向堆叠超过一屏时，
+      //    按 DP 平衡切分折到右侧新列，保持每个分支仍向右展开、阅读顺序不变 ——
+      const COL_GAP = 72; // 列间距（明显大于层间距，视觉上区分列）
+      // 目标宽高比：约等于可视区域（扣掉侧边栏/工具栏），限在 1.1~2.4
+      const TARGET_RATIO = (typeof window !== 'undefined')
+        ? Math.max(1.1, Math.min(2.4, (window.innerWidth - 320) / (window.innerHeight - 120)))
+        : 1.6;
+
+      // 子树高度/宽度（memo 化）
+      const sizeMemo = new Map();
+      const subtreeH = (id) => {
+        if (sizeMemo.has(id)) return sizeMemo.get(id).h;
+        const node = nodeMap.get(id);
+        const kids = childrenMap.get(id) || [];
+        let total = 0;
+        kids.forEach(kid => { total += subtreeH(kid) + V_GAP; });
+        if (kids.length > 0) total -= V_GAP;
+        const h = Math.max(total, nodeH(node));
+        sizeMemo.set(id, { h });
+        return h;
+      };
+      // 子树最大右向延伸宽（含每层 H_GAP，与 layoutNode 的动态缩进一致）
+      const subtreeW = (id) => {
+        if (sizeMemo.has(id) && sizeMemo.get(id).w !== undefined) return sizeMemo.get(id).w;
+        const node = nodeMap.get(id);
+        const kids = childrenMap.get(id) || [];
+        let w = nodeW(node);
+        if (kids.length > 0) w += H_GAP + Math.max(...kids.map(subtreeW));
+        const m = sizeMemo.get(id) || { h: subtreeH(id) };
+        m.w = w;
+        sizeMemo.set(id, m);
+        return w;
+      };
+
+      // 布局一个根：分支少 → 单列；分支多 → 选宽高比最贴近屏幕的列数分列铺宽
+      const layoutRootBlock = (root, startY) => {
+        const rootW = nodeW(root);
+        const rootH = nodeH(root);
+        const kids = childrenMap.get(root.id) || [];
+
+        if (kids.length <= 1) {
+          return layoutNode(root.id, START_X, startY);
+        }
+
+        const k = kids.length;
+        const hs = kids.map(subtreeH);
+        const prefix = [0];
+        hs.forEach((h, i) => prefix.push(prefix[i] + h));
+        const rangeH = (i, j) => prefix[j] - prefix[i] + V_GAP * (j - i - 1); // [i,j) 列高
+
+        // DP：把前 i 个分支切成 j 列的最小最大列高（经典线性分区），同时回溯切分点
+        const INF = Infinity;
+        const best = Array.from({ length: k + 1 }, () => new Array(k + 1).fill(INF));
+        const cut = Array.from({ length: k + 1 }, () => new Array(k + 1).fill(0));
+        best[0][0] = 0;
+        for (let i = 1; i <= k; i++) {
+          for (let j = 1; j <= i; j++) {
+            for (let m = j - 1; m < i; m++) {
+              if (best[m][j - 1] === INF) continue;
+              const v = Math.max(best[m][j - 1], rangeH(m, i));
+              if (v < best[i][j]) { best[i][j] = v; cut[i][j] = m; }
+            }
+          }
+        }
+
+        // 按切分点取回每列分支下标，并算该列数下的总宽
+        const splitCols = (n) => {
+          const bounds = [];
+          let i2 = k;
+          for (let j = n; j >= 1; j--) { bounds.unshift(cut[i2][j]); i2 = cut[i2][j]; }
+          const cols = [];
+          let width = rootW + H_GAP;
+          for (let j = 0; j < n; j++) {
+            const colKids = kids.slice(bounds[j], bounds[j + 1] ?? k);
+            cols.push(colKids);
+            width += Math.max(...colKids.map(subtreeW)) + (j < n - 1 ? COL_GAP : 0);
+          }
+          return { cols, width, maxH: best[k][n] };
+        };
+
+        // 逐列数评估宽高比，选最贴近屏幕的（同分取更少列数）
+        let chosen = null;
+        let chosenN = 1;
+        let bestScore = Infinity;
+        for (let n = 1; n <= k; n++) {
+          if (best[k][n] === INF) continue;
+          const { width, maxH } = splitCols(n);
+          const ratio = width / Math.max(maxH, rootH, 1);
+          const score = Math.abs(ratio - TARGET_RATIO) + n * 0.001; // 轻微惩罚多列
+          if (score < bestScore) { bestScore = score; chosenN = n; }
+        }
+        chosen = splitCols(chosenN);
+
+        if (chosenN <= 1) {
+          return layoutNode(root.id, START_X, startY);
+        }
+
+        // 各列 x：从根右侧依次排开
+        const colX = [];
+        let x = START_X + rootW + H_GAP;
+        chosen.cols.forEach((col) => {
+          const w = Math.max(...col.map(subtreeW));
+          colX.push(x);
+          x += w + COL_GAP;
+        });
+
+        // 布局各列（列内自上而下堆叠，每个子树整体向右展开）
+        let maxColH = 0;
+        chosen.cols.forEach((col, ci) => {
+          let cy = startY;
+          col.forEach(kid => {
+            const kh = layoutNode(kid, colX[ci], cy);
+            cy += kh + V_GAP;
+          });
+          maxColH = Math.max(maxColH, cy - startY - V_GAP);
+        });
+
+        // 根节点垂直居中于整体
+        root.position = { x: START_X, y: startY + (maxColH - rootH) / 2 };
+        return maxColH;
+      };
+
       let cy = START_Y;
       rootNodes.forEach((root, i) => {
-        const rh = layoutNode(root.id, START_X, cy);
+        const rh = layoutRootBlock(root, cy);
         cy += rh + (i < rootNodes.length - 1 ? ROOT_GAP : 0);
       });
 
