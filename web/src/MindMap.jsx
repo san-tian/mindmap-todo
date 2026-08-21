@@ -479,9 +479,9 @@ export default function MindMap() {
   const [settingsLoaded, setSettingsLoaded] = React.useState(false);
   // 用户在设置返回前手动改过下拉框时置 true：服务端保存值不再覆盖用户选择
   const userTouchedSettingsRef = React.useRef(false);
-  // 布局模式：compact = 轮廓打包（子树互相咬合利用空隙）；standard = 矩形堆叠
-  const [layoutMode, setLayoutMode] = React.useState('compact');
-  const layoutModeRef = React.useRef('compact');
+  // 布局模式：standard = 矩形堆叠（默认，即分列铺宽版）；compact = 轮廓打包（子树咬合利用空隙，可选）
+  const [layoutMode, setLayoutMode] = React.useState('standard');
+  const layoutModeRef = React.useRef('standard');
 
   React.useEffect(() => {
     layoutModeRef.current = layoutMode;
@@ -516,7 +516,7 @@ export default function MindMap() {
             setBgMode(res.settings.bgMode === 'white' ? 'dots' : res.settings.bgMode);
           }
           if (res.settings.layoutMode) {
-            setLayoutMode(res.settings.layoutMode === 'standard' ? 'standard' : 'compact');
+            setLayoutMode(res.settings.layoutMode === 'compact' ? 'compact' : 'standard');
           }
         }
       })

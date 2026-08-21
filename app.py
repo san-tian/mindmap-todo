@@ -433,9 +433,9 @@ def api_save_settings():
         bg_mode = body.get('bgMode', 'white')
         if bg_mode not in ('white', 'dots', 'lines'):
             bg_mode = 'white'
-        layout_mode = body.get('layoutMode', 'compact')
+        layout_mode = body.get('layoutMode', 'standard')
         if layout_mode not in ('compact', 'standard'):
-            layout_mode = 'compact'
+            layout_mode = 'standard'
         settings = {'bgMode': bg_mode, 'layoutMode': layout_mode}
         save_settings(settings)
         return jsonify({'success': True, 'settings': settings})
