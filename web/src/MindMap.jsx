@@ -476,7 +476,9 @@ export default function MindMap() {
   const [dragOverQuadrant, setDragOverQuadrant] = React.useState(null);
   const [viewMode, setViewMode] = React.useState('status'); // status | time | quadrant
   const [bgMode, setBgMode] = React.useState('dots'); // dots | lines | white（点阵为默认，白板感）
-  const bgModeLoadedRef = React.useRef(false);
+  const [settingsLoaded, setSettingsLoaded] = React.useState(false);
+  // 用户在设置返回前手动改过下拉框时置 true：服务端保存值不再覆盖用户选择
+  const userTouchedSettingsRef = React.useRef(false);
   // 布局模式：compact = 轮廓打包（子树互相咬合利用空隙）；standard = 矩形堆叠
   const [layoutMode, setLayoutMode] = React.useState('compact');
   const layoutModeRef = React.useRef('compact');
@@ -500,12 +502,14 @@ export default function MindMap() {
     edgesRef.current = edges;
   }, [nodes, edges]);
 
-  // 加载背景设置（持久化到后端）
+  // 加载背景/布局设置（持久化到后端）
   React.useEffect(() => {
     let cancelled = false;
     storage.getSettings()
       .then(res => {
         if (cancelled) return;
+        // 用户已手动改过下拉框：不覆盖用户选择（修复加载早期切换被服务端值回弹的竞态）
+        if (userTouchedSettingsRef.current) return;
         if (res.success && res.settings) {
           if (res.settings.bgMode) {
             // 旧配置里保存的 'white' 迁移为 'dots'：新版默认白板点阵背景
@@ -518,23 +522,26 @@ export default function MindMap() {
       })
       .catch(() => {})
       .finally(() => {
-        if (!cancelled) {
-          // 延迟标记，避免把刚加载的设置又存一遍
-          setTimeout(() => { bgModeLoadedRef.current = true; }, 0);
-        }
+        if (!cancelled) setSettingsLoaded(true);
       });
     return () => { cancelled = true; };
   }, []);
 
-  // 背景变化时保存到后端
+  // 设置变化时保存到后端（settingsLoaded 进入依赖：加载完成后补存用户在加载期间的手动修改）
   React.useEffect(() => {
-    if (!bgModeLoadedRef.current) return;
+    if (!settingsLoaded) return;
     storage.saveSettings({ bgMode, layoutMode }).catch(() => {});
-  }, [bgMode, layoutMode]);
+  }, [bgMode, layoutMode, settingsLoaded]);
 
-  // 手动切换布局模式时重新排版（设置加载阶段不触发）
+  // 手动切换布局模式时重新排版；首次挂载跳过（初始布局由项目加载流程负责）。
+  // 注意：不能用“设置是否已加载”做门控——否则加载早期切换会被静默吞掉，
+  // 出现“下拉框已变但布局仍是旧模式”的残留（用户看到假的标准模式）
+  const layoutModeFirstRunRef = React.useRef(true);
   React.useEffect(() => {
-    if (!bgModeLoadedRef.current) return;
+    if (layoutModeFirstRunRef.current) {
+      layoutModeFirstRunRef.current = false;
+      return;
+    }
     manager.autoLayout?.();
   }, [layoutMode]);
 
@@ -984,14 +991,15 @@ export default function MindMap() {
 
         // 布局各列（列内自上而下堆叠；紧凑模式下相邻分支轮廓咬合）
         if (compact) {
-          const BRANCH_GAP = 16; // 主分支间距稍大，保持可读
+          // 主分支间距用 V_GAP（与标准模式一致）：轮廓打包的位移恒 ≤ 矩形堆叠位移，
+          // 保证紧凑模式高度恒不高于标准模式（之前 16px 间距会让密实树反而更高）
           let blockTop = Infinity, blockBottom = -Infinity;
           chosen.cols.forEach((col, ci) => {
             const placed = [];
             col.forEach(kid => {
               const r = layoutPacked(kid, colX[ci], startY);
               const rects = subtreeRectsAbs(kid);
-              const dy = minShiftY(placed, rects, BRANCH_GAP);
+              const dy = minShiftY(placed, rects, V_GAP);
               if (dy > 0) {
                 shiftSubtreeY(kid, dy);
                 r.top += dy; r.bottom += dy;
@@ -1381,7 +1389,7 @@ export default function MindMap() {
           <select
             className="project-select bg-select"
             value={bgMode}
-            onChange={(e) => setBgMode(e.target.value)}
+            onChange={(e) => { userTouchedSettingsRef.current = true; setBgMode(e.target.value); }}
             title="切换背景"
           >
             <option value="white">纯白背景</option>
@@ -1391,7 +1399,7 @@ export default function MindMap() {
           <select
             className="project-select bg-select"
             value={layoutMode}
-            onChange={(e) => setLayoutMode(e.target.value)}
+            onChange={(e) => { userTouchedSettingsRef.current = true; setLayoutMode(e.target.value); }}
             title="布局模式：紧凑=子树轮廓互相咬合利用空隙；标准=矩形堆叠"
           >
             <option value="compact">紧凑布局</option>
