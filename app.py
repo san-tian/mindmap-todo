@@ -189,11 +189,25 @@ def api_get_project(pid):
 
 @app.route('/api/projects/<pid>', methods=['POST'])
 def api_save_project(pid):
-    """保存项目数据（nodes/edges）"""
+    """保存项目数据（nodes/edges）。
+
+    乐观锁：body 可带 baseUpdatedAt（客户端所基于的服务端版本）。
+    与当前版本不一致时返回 conflict + 服务端最新数据，由客户端合并后重试，
+    避免「旧快照整包覆盖新数据」的多端互冲。
+    """
     try:
         body = request.get_json(silent=True) or {}
         nodes = body.get('nodes', [])
         edges = body.get('edges', [])
+        base_updated_at = body.get('baseUpdatedAt')
+        current = _load_project(pid)
+        if current and base_updated_at and base_updated_at != current.get('updatedAt'):
+            return jsonify({
+                'success': False,
+                'conflict': True,
+                'updatedAt': current.get('updatedAt'),
+                'project': current,
+            })
         p = _save_project(pid, nodes, edges)
         return jsonify({'success': True, 'updatedAt': p.get('updatedAt')})
     except ValueError:
@@ -498,4 +512,4 @@ if __name__ == '__main__':
     print(f"服务地址: http://0.0.0.0:{port}")
     print("=" * 60)
 
-    app.run(debug=debug, host='0.0.0.0', port=port)
+    app.run(debug=debug, host=os.environ.get('HOST', '0.0.0.0'), port=port)

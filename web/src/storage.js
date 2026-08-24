@@ -64,10 +64,14 @@ const localAdapter = {
     return { success: true, project: p };
   },
 
-  async saveProject(id, nodes, edges) {
+  async saveProject(id, nodes, edges, baseUpdatedAt) {
     const all = readProjects();
     const p = all[id];
     if (!p) return { success: false, error: 'project not found' };
+    // 与后端一致的乐观锁：版本不匹配返回 conflict + 最新数据
+    if (baseUpdatedAt && baseUpdatedAt !== p.updatedAt) {
+      return { success: false, conflict: true, updatedAt: p.updatedAt, project: p };
+    }
     p.nodes = nodes;
     p.edges = edges;
     p.updatedAt = now();
@@ -122,7 +126,7 @@ const apiAdapter = {
   listProjects: () => request('GET', '/api/projects'),
   createProject: (name) => request('POST', '/api/projects', { name }),
   getProject: (id) => request('GET', `/api/projects/${id}`),
-  saveProject: (id, nodes, edges) => request('POST', `/api/projects/${id}`, { nodes, edges }),
+  saveProject: (id, nodes, edges, baseUpdatedAt) => request('POST', `/api/projects/${id}`, { nodes, edges, baseUpdatedAt }),
   renameProject: (id, name) => request('PATCH', `/api/projects/${id}`, { name }),
   deleteProject: (id) => request('DELETE', `/api/projects/${id}`),
   getSettings: () => request('GET', '/api/settings'),

@@ -61,6 +61,56 @@ const QUADRANT_ORDER = [
   { key: 'none', label: '未分类', color: '#cbd5e1' },
 ];
 
+// —— 多端同步：数据规整与三方合并 ——
+// 节点净形（发送/基线比对用的最小字段；position 只影响布局且会被自动重排接管，不参与冲突判定）
+const sanitizeNode = (n) => ({
+  id: n.id,
+  type: 'custom',
+  position: { x: n.position?.x ?? 0, y: n.position?.y ?? 0 },
+  data: {
+    label: n.data?.label ?? '',
+    status: n.data?.status ?? 'pending',
+    createdAt: n.data?.createdAt ?? null,
+    doneAt: n.data?.doneAt ?? null,
+    quadrant: n.data?.quadrant ?? null,
+  },
+});
+const nodeContentSig = (n) => JSON.stringify([
+  n.data?.label ?? '', n.data?.status ?? 'pending',
+  n.data?.createdAt ?? null, n.data?.doneAt ?? null, n.data?.quadrant ?? null,
+]);
+const edgeKey = (e) => `${e.source}->${e.target}`;
+
+// 三方合并：本地改动优先，未改字段采纳服务端，双方新增都保留（删除同理）
+const mergeProjectData = (baseNodes, baseEdges, localNodes, localEdges, serverNodes, serverEdges) => {
+  const baseById = new Map(baseNodes.map(n => [n.id, n]));
+  const serverById = new Map(serverNodes.map(n => [n.id, n]));
+  const localById = new Map(localNodes.map(n => [n.id, n]));
+  const mergedNodes = [];
+  new Set([...serverById.keys(), ...localById.keys()]).forEach(id => {
+    const b = baseById.get(id), l = localById.get(id), s = serverById.get(id);
+    if (l && !b) { mergedNodes.push(l); return; }                     // 本地新增
+    if (!l && b) return;                                               // 本地删除
+    if (l && b && nodeContentSig(l) !== nodeContentSig(b)) { mergedNodes.push(l); return; } // 本地修改
+    if (s) mergedNodes.push(s);                                        // 未改（或服务端新增）
+  });
+  const baseEdgeMap = new Map(baseEdges.map(e => [edgeKey(e), e]));
+  const serverEdgeMap = new Map(serverEdges.map(e => [edgeKey(e), e]));
+  const localEdgeMap = new Map(localEdges.map(e => [edgeKey(e), e]));
+  const mergedEdges = [];
+  new Set([...serverEdgeMap.keys(), ...localEdgeMap.keys()]).forEach(key => {
+    const b = baseEdgeMap.get(key), l = localEdgeMap.get(key), s = serverEdgeMap.get(key);
+    if (l && !b) { mergedEdges.push(l); return; }                      // 本地新增连线
+    if (!l && b) return;                                               // 本地删除连线
+    if (s) mergedEdges.push(s);                                        // 未改 / 服务端新增
+  });
+  const nodeIdSet = new Set(mergedNodes.map(n => n.id));
+  return {
+    nodes: mergedNodes,
+    edges: mergedEdges.filter(e => nodeIdSet.has(e.source) && nodeIdSet.has(e.target)),
+  };
+};
+
 // 全局状态管理器
 class MindMapManager {
   constructor() {
@@ -496,11 +546,19 @@ export default function MindMap() {
   const currentProjectIdRef = React.useRef(null);
   // 首次布局用了估算尺寸时置 true；等 React Flow 实测完全部节点后重排一次
   const estimatePendingRef = React.useRef(false);
+  // 多端同步：上次成功同步到服务端的快照（乐观锁基线）与脏标记
+  const syncBaseRef = React.useRef({ updatedAt: null, nodes: [], edges: [] });
+  const dirtyRef = React.useRef(false);
+  const projectsRef = React.useRef([]);
 
   React.useEffect(() => {
     nodesRef.current = nodes;
     edgesRef.current = edges;
   }, [nodes, edges]);
+
+  React.useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
 
   // 加载背景/布局设置（持久化到后端）
   React.useEffect(() => {
@@ -545,26 +603,46 @@ export default function MindMap() {
     manager.autoLayout?.();
   }, [layoutMode]);
 
-  // 自动保存到后端（防抖 1200ms）
+  // 应用合并结果（多端冲突解决后）：进画布、更新基线，并触发防抖重试保存
+  const applyMergedData = React.useCallback((merged, updatedAt) => {
+    const projName = projectsRef.current.find(p => p.id === currentProjectIdRef.current)?.name;
+    const rootNodeIds = new Set(merged.nodes.filter(n => !merged.edges.some(e => e.target === n.id)).map(n => n.id));
+    setNodes(merged.nodes.map(n => ({
+      ...n,
+      data: { ...n.data, isRoot: rootNodeIds.has(n.id), ...(rootNodeIds.has(n.id) ? { label: projName || n.data.label } : {}) },
+    })));
+    setEdges(merged.edges);
+    syncBaseRef.current = { updatedAt: updatedAt ?? null, nodes: merged.nodes, edges: merged.edges };
+    dirtyRef.current = true; // setNodes 触发防抖保存，把合并结果写回服务端
+    const maxId = merged.nodes.reduce((m, n) => Math.max(m, parseInt(n.id) || 0), 0);
+    manager.nodeIdCounter.current = maxId + 1;
+    setTimeout(() => { manager.autoLayout?.(false); }, 50);
+  }, [setNodes, setEdges]);
+
+  // 自动保存到后端（防抖 1200ms）；带乐观锁 baseUpdatedAt，
+  // 冲突时三方合并后由防抖通道自动重试，避免多端互覆盖
   const doSave = React.useCallback(async () => {
     const pid = currentProjectIdRef.current;
     if (!pid) return;
     setSaveStatus('saving');
     try {
-      const nodesToSave = nodesRef.current.map(n => ({
-        ...n,
-        data: {
-          label: n.data.label,
-          status: n.data.status,
-          createdAt: n.data.createdAt,
-          doneAt: n.data.doneAt,
-          quadrant: n.data.quadrant,
-        },
-      }));
-      const result = await storage.saveProject(pid, nodesToSave, edgesRef.current);
+      const nodesToSave = nodesRef.current.map(sanitizeNode);
+      const edgesToSave = edgesRef.current.map(e => ({ id: e.id, source: e.source, target: e.target }));
+      const result = await storage.saveProject(pid, nodesToSave, edgesToSave, syncBaseRef.current.updatedAt);
       if (result.success) {
+        syncBaseRef.current = { updatedAt: result.updatedAt, nodes: nodesToSave, edges: edgesToSave };
+        dirtyRef.current = false;
         setSaveStatus('saved');
         setLastSavedAt(new Date());
+      } else if (result.conflict) {
+        // 别的端先存了：三方合并（本地改动优先，未改的采纳服务端），再走防抖通道重试
+        const merged = mergeProjectData(
+          syncBaseRef.current.nodes, syncBaseRef.current.edges,
+          nodesToSave, edgesToSave,
+          result.project?.nodes || [], result.project?.edges || [],
+        );
+        applyMergedData(merged, result.updatedAt);
+        setSaveStatus('pending');
       } else {
         setSaveStatus('error');
       }
@@ -572,11 +650,12 @@ export default function MindMap() {
       console.error('自动保存失败:', error);
       setSaveStatus('error');
     }
-  }, []);
+  }, [applyMergedData]);
 
   React.useEffect(() => {
     if (!loadedRef.current) return;
     setSaveStatus('pending');
+    dirtyRef.current = true;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       doSave();
@@ -1135,6 +1214,13 @@ export default function MindMap() {
     setEdges(edges);
     setSelectedNodeId(null);
     setDropTargetId(null);
+    // 多端同步：记录服务端当前版本为乐观锁基线
+    syncBaseRef.current = {
+      updatedAt: project.updatedAt ?? null,
+      nodes: (project.nodes || []).map(sanitizeNode),
+      edges: (project.edges || []).map(e => ({ id: e.id, source: e.source, target: e.target })),
+    };
+    dirtyRef.current = false;
     const maxId = nodes.reduce((m, n) => Math.max(m, parseInt(n.id) || 0), 0);
     manager.nodeIdCounter.current = maxId + 1;
 
@@ -1143,6 +1229,25 @@ export default function MindMap() {
       manager.autoLayout?.();
     }, 80);
   };
+
+  // 空闲同步：本地无未保存改动时每 15s 拉一次，服务端有更新就热加载（多端保持最新）
+  React.useEffect(() => {
+    const timer = setInterval(async () => {
+      const pid = currentProjectIdRef.current;
+      if (!pid || !loadedRef.current) return;
+      if (dirtyRef.current) return; // 有未保存改动：交给冲突合并路径处理
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return; // 正在编辑，别打断
+      try {
+        const result = await storage.getProject(pid);
+        if (result.success && result.project && result.project.updatedAt &&
+            result.project.updatedAt !== syncBaseRef.current.updatedAt) {
+          applyProjectData(result.project);
+        }
+      } catch { /* 网络抖动忽略 */ }
+    }, 15000);
+    return () => clearInterval(timer);
+  }, []); // applyProjectData 仅依赖稳定的 setter/manager，首渲染闭包即可
 
   const loadProject = async (id) => {
     if (!id) return;
@@ -1225,6 +1330,8 @@ export default function MindMap() {
     if (!name) return;
     const result = await storage.renameProject(pid, name);
     if (result.success) {
+      // 重命名会推动 updatedAt：同步基线，避免下次保存被误判冲突
+      if (result.project?.updatedAt) syncBaseRef.current.updatedAt = result.project.updatedAt;
       setProjects(prev => prev.map(p => (p.id === pid ? { ...p, name } : p)));
       // 同步根节点标题为项目名
       setNodes(nds => nds.map(n => (n.data?.isRoot ? { ...n, data: { ...n.data, label: name } } : n)));
