@@ -758,8 +758,12 @@ export default function MindMap() {
         .filter(n => !edgeList.some(e => e.target === n.id))
         .sort((a, b) => (a.position?.y || 0) - (b.position?.y || 0));
 
+      const compact = layoutModeRef.current === 'compact';
+
       const H_GAP = 36;   // 父节点右边缘到子节点左边缘的水平间距
-      const V_GAP = 5;    // 兄弟节点垂直间距
+      // 动态垂直间距（标准模式）：小树更透气、大树保持紧凑；紧凑模式恒定追求密度
+      // 22-0.3×节点数，限在 [5, 15]：≤20 节点 15px，50 节点 7px，57+ 节点 5px（与旧版一致）
+      const V_GAP = compact ? 5 : Math.max(5, Math.min(15, 22 - nds.length * 0.3));
       const ROOT_GAP = 20;
       const START_X = 24;
       const START_Y = 28;
@@ -812,8 +816,6 @@ export default function MindMap() {
         if (totalH > h) node.position.y = y + (totalH - h) / 2;
         return Math.max(totalH, h);
       };
-
-      const compact = layoutModeRef.current === 'compact';
 
       // —— 紧凑模式：子树轮廓打包（内容绝不重叠，但利用相邻子树的阶梯空隙）——
       const subtreeRectsAbs = (id) => {
