@@ -73,13 +73,64 @@ const sanitizeNode = (n) => ({
     createdAt: n.data?.createdAt ?? null,
     doneAt: n.data?.doneAt ?? null,
     quadrant: n.data?.quadrant ?? null,
+    key: n.data?.key ?? null,
   },
 });
 const nodeContentSig = (n) => JSON.stringify([
   n.data?.label ?? '', n.data?.status ?? 'pending',
   n.data?.createdAt ?? null, n.data?.doneAt ?? null, n.data?.quadrant ?? null,
+  n.data?.key ?? null,
 ]);
-const edgeKey = (e) => `${e.source}->${e.target}`;
+// —— 导出：文字版 Markdown 与 JSON 留档 ——
+const STATUS_MARKS = { running: '▶', waiting: '⏳', pending: '○', idel: '⏸', done: '✓', context: 'ℹ' };
+
+const buildMarkdown = (nodes, edges, name) => {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const children = new Map();
+  edges.forEach(e => { if (!children.has(e.source)) children.set(e.source, []); children.get(e.source).push(e.target); });
+  const sortKey = (id) => byId.get(id)?.position?.y ?? 0;
+  children.forEach(list => list.sort((a, b) => sortKey(a) - sortKey(b)));
+  const rootIds = nodes.filter(n => !edges.some(e => e.target === n.id)).map(n => n.id).sort((a, b) => sortKey(a) - sortKey(b));
+
+  const lines = ['# ' + (name || '未命名项目')];
+  const walk = (id, depth) => {
+    const n = byId.get(id);
+    if (!n) return;
+    const mark = STATUS_MARKS[n.data?.status || 'pending'] || '○';
+    lines.push('  '.repeat(depth) + '- ' + mark + ' ' + (n.data?.label || ''));
+    (children.get(id) || []).forEach(c => walk(c, depth + 1));
+  };
+  // 单根且根本身 label == 项目名：跳过根，从一级分支开始（避免标题重复）
+  if (rootIds.length === 1 && byId.get(rootIds[0])?.data?.label === name) {
+    (children.get(rootIds[0]) || []).forEach(c => walk(c, 0));
+  } else {
+    rootIds.forEach(r => walk(r, 0));
+  }
+  return lines.join('\n') + '\n';
+};
+
+const copyTextToClipboard = async (text) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* 回退到 execCommand */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+};
 
 // 三方合并：本地改动优先，未改字段采纳服务端，双方新增都保留（删除同理）
 const mergeProjectData = (baseNodes, baseEdges, localNodes, localEdges, serverNodes, serverEdges) => {
@@ -618,6 +669,30 @@ export default function MindMap() {
     manager.nodeIdCounter.current = maxId + 1;
     setTimeout(() => { manager.autoLayout?.(false); }, 50);
   }, [setNodes, setEdges]);
+
+  // 导出（复制到剪贴板）：文字版 Markdown 或 JSON，用于留档
+  const [copyMsg, setCopyMsg] = React.useState('');
+  const copyMsgTimerRef = React.useRef(null);
+  const handleExport = React.useCallback(async (fmt) => {
+    const pid = currentProjectIdRef.current;
+    if (!pid) return;
+    const name = projectsRef.current.find(p => p.id === pid)?.name || '';
+    let text;
+    if (fmt === 'markdown') {
+      text = buildMarkdown(nodesRef.current, edgesRef.current, name);
+    } else {
+      text = JSON.stringify({
+        name,
+        updatedAt: syncBaseRef.current.updatedAt,
+        nodes: nodesRef.current.map(sanitizeNode),
+        edges: edgesRef.current.map(e => ({ id: e.id, source: e.source, target: e.target })),
+      }, null, 2);
+    }
+    const ok = await copyTextToClipboard(text);
+    setCopyMsg(ok ? (fmt === 'markdown' ? '已复制 Markdown' : '已复制 JSON') : '复制失败');
+    clearTimeout(copyMsgTimerRef.current);
+    copyMsgTimerRef.current = setTimeout(() => setCopyMsg(''), 2000);
+  }, []);
 
   // 自动保存到后端（防抖 1200ms）；带乐观锁 baseUpdatedAt，
   // 冲突时三方合并后由防抖通道自动重试，避免多端互覆盖
@@ -1499,10 +1574,20 @@ export default function MindMap() {
             <Save className="icon-sm" />
             {saveStatus === 'saving' ? '保存中…' : '保存'}
           </button>
-          <span className={`save-status save-status-${saveStatus}`}>
-            {saveStatus === 'saved' && (lastSavedAt ? `已自动保存 ${formatTime(lastSavedAt)}` : '已自动保存')}
-            {saveStatus === 'pending' && '待保存…'}
-            {saveStatus === 'error' && '保存失败，点击重试'}
+          <button onClick={() => handleExport('markdown')} className="btn btn-outline btn-sm" title="复制文字版 Markdown 到剪贴板（留档）">
+            复制 MD
+          </button>
+          <button onClick={() => handleExport('json')} className="btn btn-outline btn-sm" title="复制项目 JSON 到剪贴板（留档）">
+            复制 JSON
+          </button>
+          <span className={`save-status ${copyMsg ? 'save-status-saving' : `save-status-${saveStatus}`}`}>
+            {copyMsg || (
+              <>
+                {saveStatus === 'saved' && (lastSavedAt ? `已自动保存 ${formatTime(lastSavedAt)}` : '已自动保存')}
+                {saveStatus === 'pending' && '待保存…'}
+                {saveStatus === 'error' && '保存失败，点击重试'}
+              </>
+            )}
           </span>
         </div>
       </div>

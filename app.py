@@ -2,7 +2,7 @@
 """
 思维导图 TODO - Flask 后端服务器（多项目支持）
 """
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response
 from werkzeug.utils import safe_join
 import os
 import json
@@ -24,6 +24,20 @@ SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+# 状态与四象限的合法值（多处复用）
+VALID_STATUSES = ('running', 'waiting', 'pending', 'idel', 'done', 'context')
+QUADRANT_KEYS = ('q1', 'q2', 'q3', 'q4')
+# 导出文字版时的状态符号
+STATUS_MARKS = {
+    'running': '▶',
+    'waiting': '⏳',
+    'pending': '○',
+    'idel': '⏸',
+    'done': '✓',
+    'context': 'ℹ',
+}
 
 
 def _ensure_dirs():
@@ -84,6 +98,66 @@ def _save_project(pid, nodes, edges, name=None):
     p['updatedAt'] = _now()
     _atomic_write(f, p)
     return p
+
+
+def _project_to_markdown(p):
+    """把项目树渲染为 Markdown 缩进列表（状态符号 + 层级缩进）。"""
+    nodes = p.get('nodes', [])
+    edges = p.get('edges', [])
+    by_id = {n['id']: n for n in nodes}
+    children = {}
+    for e in edges:
+        children.setdefault(e['source'], []).append(e['target'])
+    for k in children:
+        children[k].sort(key=lambda tid: (by_id.get(tid, {}).get('position') or {}).get('y', 0))
+    root_ids = [n['id'] for n in nodes if not any(e['target'] == n['id'] for e in edges)]
+    root_ids.sort(key=lambda rid: (by_id.get(rid, {}).get('position') or {}).get('y', 0))
+
+    name = p.get('name') or '未命名项目'
+    lines = ['# ' + name]
+
+    def walk(nid, depth):
+        node = by_id.get(nid)
+        if not node:
+            return
+        mark = STATUS_MARKS.get(node.get('data', {}).get('status', 'pending'), '○')
+        label = node.get('data', {}).get('label', '')
+        lines.append('  ' * depth + '- ' + mark + ' ' + label)
+        for c in children.get(nid, []):
+            walk(c, depth + 1)
+
+    # 单根且根本身 label == 项目名：跳过根，从一级分支开始（避免标题重复）
+    if len(root_ids) == 1 and by_id.get(root_ids[0], {}).get('data', {}).get('label') == name:
+        for c in children.get(root_ids[0], []):
+            walk(c, 0)
+    else:
+        for r in root_ids:
+            walk(r, 0)
+    return '\n'.join(lines) + '\n'
+
+
+def _find_node(nodes, ref):
+    """按 {'id':...} 或 {'key':...} 定位节点；ref 非法或未命中返回 None。"""
+    if not isinstance(ref, dict):
+        return None
+    if ref.get('id') is not None:
+        return next((n for n in nodes if n['id'] == str(ref['id'])), None)
+    if ref.get('key') is not None:
+        return next((n for n in nodes if n.get('data', {}).get('key') == ref['key']), None)
+    return None
+
+
+def _collect_subtree(edges, nid):
+    """收集 nid 及其所有后代 id。"""
+    to_delete = {nid}
+    changed = True
+    while changed:
+        changed = False
+        for e in edges:
+            if e['source'] in to_delete and e['target'] not in to_delete:
+                to_delete.add(e['target'])
+                changed = True
+    return to_delete
 
 
 def _migrate_legacy():
@@ -262,9 +336,12 @@ def api_add_node(pid):
         if status not in ('running', 'pending', 'done', 'context', 'waiting', 'idel'):
             status = 'pending'
         quadrant = body.get('quadrant')
-        if quadrant not in ('q1', 'q2', 'q3', 'q4'):
+        if quadrant not in QUADRANT_KEYS:
             quadrant = None
         parent_id = body.get('parentId')
+        key = body.get('key')
+        if key is not None and not isinstance(key, str):
+            return jsonify({'success': False, 'error': 'key 必须是字符串'}), 400
 
         nodes = p.get('nodes', [])
         edges = p.get('edges', [])
@@ -280,6 +357,8 @@ def api_add_node(pid):
         data = {'label': label, 'status': status, 'createdAt': _now()}
         if quadrant:
             data['quadrant'] = quadrant
+        if key:
+            data['key'] = key
 
         new_node = {
             'id': new_id,
@@ -335,10 +414,15 @@ def api_update_node(pid, nid):
             node['data']['status'] = body['status']
         if 'quadrant' in body:
             q = body.get('quadrant')
-            if q in ('q1', 'q2', 'q3', 'q4'):
+            if q in QUADRANT_KEYS:
                 node['data']['quadrant'] = q
             else:
                 node['data'].pop('quadrant', None)
+        if 'key' in body:
+            if body.get('key'):
+                node['data']['key'] = body['key']
+            else:
+                node['data'].pop('key', None)
 
         p = _save_project(pid, nodes, p.get('edges', []))
         return jsonify({'success': True, 'node': node, 'project': p})
@@ -421,6 +505,165 @@ def api_move_node(pid, nid):
     except Exception as e:
         print(f"Error moving node: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/projects/<pid>/export', methods=['GET'])
+def api_export_project(pid):
+    """导出项目为 Markdown 或 JSON（留档用）。
+
+    ?format=markdown|md|text → 返回纯文本 Markdown（Content-Disposition 附件）
+    ?format=json（默认）      → 返回项目 JSON
+    """
+    p = _load_project(pid)
+    if not p:
+        return jsonify({'success': False, 'error': 'project not found'}), 404
+    fmt = (request.args.get('format') or 'json').lower()
+    if fmt in ('markdown', 'md', 'text'):
+        resp = make_response(_project_to_markdown(p))
+        resp.headers['Content-Type'] = 'text/markdown; charset=utf-8'
+        resp.headers['Content-Disposition'] = f'attachment; filename="{p.get("id", pid)}.md"'
+        return resp
+    resp = make_response(json.dumps(p, ensure_ascii=False, indent=2))
+    resp.headers['Content-Type'] = 'application/json; charset=utf-8'
+    resp.headers['Content-Disposition'] = f'attachment; filename="{p.get("id", pid)}.json"'
+    return resp
+
+
+# ============================================
+# Agent 接口（面向脚本/agent 的便捷入口，无鉴权，靠网络隔离）
+# ============================================
+
+@app.route('/api/agent/projects', methods=['GET'])
+def api_agent_list_projects():
+    """列出项目（id/name/nodeCount/updatedAt），与 /api/projects 相同。"""
+    projects = []
+    try:
+        for fn in os.listdir(PROJECTS_DIR):
+            if not fn.endswith('.json'):
+                continue
+            p = _load_project(fn[:-5])
+            if p:
+                projects.append({
+                    'id': p.get('id'),
+                    'name': p.get('name'),
+                    'nodeCount': len(p.get('nodes', [])),
+                    'updatedAt': p.get('updatedAt'),
+                })
+    except FileNotFoundError:
+        pass
+    projects.sort(key=lambda x: x.get('updatedAt') or '', reverse=True)
+    return jsonify({'success': True, 'projects': projects})
+
+
+@app.route('/api/agent/projects/<pid>', methods=['GET'])
+def api_agent_get_project(pid):
+    """获取项目：默认返回项目 JSON；?format=markdown 返回文字版 Markdown。"""
+    p = _load_project(pid)
+    if not p:
+        return jsonify({'success': False, 'error': 'project not found'}), 404
+    fmt = (request.args.get('format') or 'json').lower()
+    if fmt in ('markdown', 'md', 'text'):
+        resp = make_response(_project_to_markdown(p))
+        resp.headers['Content-Type'] = 'text/markdown; charset=utf-8'
+        return resp
+    return jsonify(p)
+
+
+@app.route('/api/agent/projects/<pid>/edit', methods=['POST'])
+def api_agent_edit(pid):
+    """Agent 批量编辑：{"ops":[...], "baseUpdatedAt"?}
+
+    op 类型：
+    - upsert：按 key（或 id）查找；命中则更新给定字段（给了 parent 则移动），
+      未命中则创建（含 key/label/status/quadrant），挂到 parent 下（parent 缺省=根）。
+      字段：key / id / parentId / parentKey / label / status / quadrant
+    - delete：按 key（或 id）删除节点及其整棵子树。
+
+    整体原子：任一 op 非法则整批不生效，返回 400 并附 op 下标。
+    可选 baseUpdatedAt：与服务端版本不一致时返回 conflict（与保存接口同语义，供 agent 做乐观锁）。
+    """
+    p = _load_project(pid)
+    if not p:
+        return jsonify({'success': False, 'error': 'project not found'}), 404
+    body = request.get_json(silent=True) or {}
+    base = body.get('baseUpdatedAt')
+    if base and base != p.get('updatedAt'):
+        return jsonify({'success': False, 'conflict': True, 'updatedAt': p.get('updatedAt'), 'project': p})
+    ops = body.get('ops')
+    if not isinstance(ops, list) or not ops:
+        return jsonify({'success': False, 'error': 'ops 必须是非空数组'}), 400
+
+    nodes = p.get('nodes', [])
+    edges = p.get('edges', [])
+
+    def next_id():
+        mx = 0
+        for n in nodes:
+            try:
+                mx = max(mx, int(n['id']))
+            except (ValueError, TypeError):
+                pass
+        return str(mx + 1)
+
+    def apply_status(node, status):
+        prev = node.get('data', {}).get('status')
+        if status == 'done' and prev != 'done':
+            node.setdefault('data', {})['doneAt'] = _now()
+        elif status != 'done' and prev == 'done':
+            node.get('data', {}).pop('doneAt', None)
+        node.setdefault('data', {})['status'] = status
+
+    for idx, op in enumerate(ops):
+        kind = op.get('op')
+        if kind == 'upsert':
+            node = _find_node(nodes, {'id': op.get('id'), 'key': op.get('key')})
+            has_parent = op.get('parentId') is not None or op.get('parentKey') is not None
+            parent = _find_node(nodes, {'id': op.get('parentId'), 'key': op.get('parentKey')}) if has_parent else None
+
+            if node is None:
+                label = (op.get('label') or '').strip() or '新任务'
+                status = op.get('status') if op.get('status') in VALID_STATUSES else 'pending'
+                data = {'label': label, 'status': status, 'createdAt': _now()}
+                if op.get('key'):
+                    data['key'] = op['key']
+                if op.get('quadrant') in QUADRANT_KEYS:
+                    data['quadrant'] = op['quadrant']
+                node = {'id': next_id(), 'type': 'custom', 'position': {'x': 50, 'y': 250}, 'data': data}
+                nodes.append(node)
+            else:
+                if 'label' in op:
+                    node['data']['label'] = (op.get('label') or '').strip() or node['data'].get('label', '')
+                if op.get('status') in VALID_STATUSES:
+                    apply_status(node, op['status'])
+                if 'quadrant' in op:
+                    if op.get('quadrant') in QUADRANT_KEYS:
+                        node['data']['quadrant'] = op['quadrant']
+                    else:
+                        node['data'].pop('quadrant', None)
+                if op.get('key'):
+                    node['data']['key'] = op['key']
+
+            if parent:
+                if parent['id'] == node['id']:
+                    return jsonify({'success': False, 'error': f'op[{idx}]: 不能挂到自身下'}), 400
+                if parent['id'] in _collect_subtree(edges, node['id']):
+                    return jsonify({'success': False, 'error': f'op[{idx}]: 不能挂到自身后代下'}), 400
+                edges[:] = [e for e in edges if e['target'] != node['id']]
+                edges.append({'id': f'e{parent["id"]}-{node["id"]}', 'source': parent['id'], 'target': node['id'], 'type': 'default', 'markerEnd': {'type': 'arrowclosed'}})
+
+        elif kind == 'delete':
+            node = _find_node(nodes, {'id': op.get('id'), 'key': op.get('key')})
+            if not node:
+                return jsonify({'success': False, 'error': f'op[{idx}]: 节点不存在'}), 400
+            to_delete = _collect_subtree(edges, node['id'])
+            nodes[:] = [n for n in nodes if n['id'] not in to_delete]
+            edges[:] = [e for e in edges if e['source'] not in to_delete and e['target'] not in to_delete]
+
+        else:
+            return jsonify({'success': False, 'error': f'op[{idx}]: 未知 op 类型 {kind!r}'}), 400
+
+    p = _save_project(pid, nodes, edges)
+    return jsonify({'success': True, 'updatedAt': p.get('updatedAt'), 'project': p})
 
 
 @app.route('/api/health', methods=['GET'])

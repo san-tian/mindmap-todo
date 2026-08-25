@@ -123,3 +123,72 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 - 节点 `quadrant`（四象限，可选）只接受 `q1`（重要紧急）/ `q2`（重要不紧急）/ `q3`（不重要紧急）/ `q4`（不重要不紧急）；传空值表示清除。
 - 节点自动记录 `createdAt`（创建时间）和 `doneAt`（变为 done 的时间；取消 done 时自动清除）。
 - 前端加载项目时会自动按当前规则重新排版，因此 API 写入的坐标只是初始值，不必精确。
+
+## Agent 接口（面向脚本/agent，无鉴权，靠网络隔离）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/agent/projects` | 列出项目（同 `/api/projects`） |
+| GET | `/api/agent/projects/<pid>` | 获取项目 JSON；`?format=markdown` 返回文字版 |
+| POST | `/api/agent/projects/<pid>/edit` | 批量编辑 `{ops:[...], baseUpdatedAt?}` |
+
+### 批量编辑 ops
+
+```jsonc
+{
+  "ops": [
+    // upsert：按 key（或 id）查找；命中则更新，未命中则创建（挂到 parent 下）
+    { "op": "upsert", "key": "deps", "label": "依赖安装", "status": "running", "parentId": "2", "quadrant": "q2" },
+    // parent 也可以用 parentKey 定位；缺省 = 根节点
+    { "op": "upsert", "key": "deploy", "label": "部署上线", "parentKey": "deps" },
+    // delete：删除节点及其整棵子树
+    { "op": "delete", "key": "deploy" }
+  ],
+  // 可选：乐观锁。与服务端 updatedAt 不一致时返回 {success:false, conflict:true, project:...}
+  "baseUpdatedAt": "2026-08-24T07:00:00+00:00"
+}
+```
+
+要点：
+- 节点可用稳定 `key`（存于 `data.key`）定位，便于脚本幂等；key 由你自定义，创建时带一次即可。
+- `status`：`running`/`waiting`/`pending`/`idel`/`done`/`context`；`quadrant`：`q1`~`q4`。
+- 整批原子：任一 op 非法则整批不生效，返回 400 并附 `op[下标]` 错误。
+- 会自动防环（不能挂到自身或后代下）、递归删子树、记录 `createdAt`/`doneAt`。
+
+### 完整示例：读 → 改 → 回写（乐观锁）
+
+```bash
+BASE=http://100.71.116.107:23456
+PID=e0470148
+
+# 1. 读
+P=$(curl -s $BASE/api/agent/projects/$PID)
+BASE_VER=$(echo "$P" | python3 -c 'import json,sys; print(json.load(sys.stdin)["updatedAt"])')
+
+# 2. 批量改（带版本号，防与网页端互覆盖）
+curl -s -X POST $BASE/api/agent/projects/$PID/edit \
+  -H 'Content-Type: application/json' \
+  -d "{\"ops\":[{\"op\":\"upsert\",\"key\":\"report\",\"label\":\"写周报\",\"status\":\"running\"}],\"baseUpdatedAt\":\"$BASE_VER\"}"
+```
+
+## 导出（留档）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/projects/<pid>/export?format=markdown` | 文字版 Markdown（附件下载） |
+| GET | `/api/projects/<pid>/export?format=json` | 项目 JSON（附件下载，默认） |
+| GET | `/api/agent/projects/<pid>?format=markdown` | 同上（文字版） |
+
+文字版格式（状态符号 + 层级缩进）：
+
+```markdown
+# 8月week3
+- ▶ 部署
+  - ○ 压测
+    - ✓ 镜像
+- ✓ 杂项
+```
+
+状态符号：`▶` 运行中 · `⏳` 等待中 · `○` 待办 · `⏸` 暂缓 · `✓` 已完成 · `ℹ` 上下文。
+
+网页工具栏也提供「复制 MD」「复制 JSON」按钮，一键复制到剪贴板。
