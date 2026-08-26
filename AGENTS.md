@@ -26,7 +26,7 @@ NAS 信息：
 - 主机 `MEmini-2380`（Debian 12，x86_64，Docker 28.5.2）
 - SSH 别名（见 `~/.ssh/config`）：
   - `nas` → `106.52.237.179:10220`，用户 `pex`（公网入口，慢）
-  - `nas-ts` → `100.71.116.107`，用户 `pex`（**tailscale 直连，快，部署用这个**）
+  - `nas-ts` → `100.78.161.108`，用户 `pex`（**tailscale 直连，快，部署用这个**）
 - 部署目录：`/home/pex/mindmap-todo`
 - 端口：宿主机 `23456` → 容器 `5000`
 - 数据：`/home/pex/mindmap-todo/data`（挂载为容器内 `/app/data`）
@@ -55,8 +55,8 @@ ssh -o BatchMode=yes nas-ts 'sleep 2; curl -s http://localhost:23456/api/health'
 ### 访问地址
 
 - 局域网：`http://192.168.31.232:23456`
-- Tailscale：`http://100.71.116.107:23456`
-- API（无鉴权）：`http://100.71.116.107:23456`（可用环境变量 `MINDMAP_TODO_URL` 覆盖）
+- Tailscale：`http://100.78.161.108:23456`
+- API（无鉴权）：`http://100.78.161.108:23456`（可用环境变量 `MINDMAP_TODO_URL` 覆盖）
 
 ### NAS 运维命令
 
