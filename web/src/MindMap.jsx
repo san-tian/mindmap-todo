@@ -81,6 +81,7 @@ const nodeContentSig = (n) => JSON.stringify([
   n.data?.createdAt ?? null, n.data?.doneAt ?? null, n.data?.quadrant ?? null,
   n.data?.key ?? null,
 ]);
+const edgeKey = (e) => `${e.source}->${e.target}`;
 // —— 导出：文字版 Markdown 与 JSON 留档 ——
 const STATUS_MARKS = { running: '▶', waiting: '⏳', pending: '○', idel: '⏸', done: '✓', context: 'ℹ' };
 
@@ -600,7 +601,13 @@ export default function MindMap() {
   // 多端同步：上次成功同步到服务端的快照（乐观锁基线）与脏标记
   const syncBaseRef = React.useRef({ updatedAt: null, nodes: [], edges: [] });
   const dirtyRef = React.useRef(false);
+  // 程序化写入（加载/轮询热更新/自动重排）置 true，抑制自动保存，避免“轮询→写回→版本+1→再轮询”的永动机式刷版本
+  const suppressSaveRef = React.useRef(false);
+  // 保存失败指数退避重试计数
+  const saveRetryRef = React.useRef(0);
   const projectsRef = React.useRef([]);
+  // applyProjectData 的 ref 间接引用（避免 useCallback 依赖数组里的 TDZ 问题）
+  const applyProjectDataRef = React.useRef(null);
 
   React.useEffect(() => {
     nodesRef.current = nodes;
@@ -707,27 +714,52 @@ export default function MindMap() {
       if (result.success) {
         syncBaseRef.current = { updatedAt: result.updatedAt, nodes: nodesToSave, edges: edgesToSave };
         dirtyRef.current = false;
+        saveRetryRef.current = 0;
         setSaveStatus('saved');
         setLastSavedAt(new Date());
       } else if (result.conflict) {
         // 别的端先存了：三方合并（本地改动优先，未改的采纳服务端），再走防抖通道重试
-        const merged = mergeProjectData(
-          syncBaseRef.current.nodes, syncBaseRef.current.edges,
-          nodesToSave, edgesToSave,
-          result.project?.nodes || [], result.project?.edges || [],
-        );
-        applyMergedData(merged, result.updatedAt);
-        setSaveStatus('pending');
+        try {
+          const merged = mergeProjectData(
+            syncBaseRef.current.nodes, syncBaseRef.current.edges,
+            nodesToSave, edgesToSave,
+            result.project?.nodes || [], result.project?.edges || [],
+          );
+          applyMergedData(merged, result.updatedAt);
+          setSaveStatus('pending');
+        } catch (mergeErr) {
+          // 合并异常时回退为「以服务端为准」整表替换，绝不卡死
+          console.error('冲突合并失败，回退为以服务端为准:', mergeErr);
+          if (result.project) applyProjectDataRef.current?.(result.project);
+          setSaveStatus('saved');
+        }
       } else {
-        setSaveStatus('error');
+        throw new Error(result.error || '保存失败');
       }
     } catch (error) {
       console.error('自动保存失败:', error);
       setSaveStatus('error');
+      // 指数退避自动重试（最多 6 次），网络抖动后自动恢复；仍失败则保持 error 等用户点重试
+      const attempt = saveRetryRef.current;
+      if (attempt < 6) {
+        saveRetryRef.current = attempt + 1;
+        const delay = Math.min(30000, 2000 * (2 ** attempt));
+        setTimeout(() => { if (dirtyRef.current) doSave(); }, delay);
+      }
     }
   }, [applyMergedData]);
 
   React.useEffect(() => {
+    // 程序化写入（加载/轮询热更新/自动重排）本身不产生新改动：
+    // 先消费标志；但若已有未保存改动（如冲突合并后），仍需重新调度保存，
+    // 因为上一轮 effect 的 cleanup 会把 saveTimerRef 清掉。
+    if (suppressSaveRef.current) {
+      suppressSaveRef.current = false;
+      if (!loadedRef.current || !dirtyRef.current) return;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => { doSave(); }, 1200);
+      return;
+    }
     if (!loadedRef.current) return;
     setSaveStatus('pending');
     dirtyRef.current = true;
@@ -892,6 +924,7 @@ export default function MindMap() {
 
   // 自动布局函数：标准=单列全右侧（矩形堆叠）；紧凑=分列铺宽+轮廓咬合（可选）
   const autoLayout = React.useCallback((fitViewAfter = true) => {
+    suppressSaveRef.current = true; // 自动重排是程序化写入，不触发保存
     setNodes(nds => {
       const nodeMap = new Map(nds.map(n => [n.id, { ...n }]));
       const edgeList = edgesRef.current;
@@ -1272,7 +1305,7 @@ export default function MindMap() {
     }
   }, []);
 
-  const applyProjectData = (project) => {
+  const applyProjectData = React.useCallback((project) => {
     const edges = project.edges || [];
     const nodes = project.nodes || [];
     const rootNodeIds = new Set(
@@ -1285,6 +1318,7 @@ export default function MindMap() {
         data: { ...n.data, isRoot, ...(isRoot ? { label: project.name } : {}) },
       };
     });
+    suppressSaveRef.current = true; // 加载/热更新是程序化写入，不触发保存
     setNodes(nodesWithRoot);
     setEdges(edges);
     setSelectedNodeId(null);
@@ -1303,7 +1337,12 @@ export default function MindMap() {
     setTimeout(() => {
       manager.autoLayout?.();
     }, 80);
-  };
+  }, [setNodes, setEdges, setSelectedNodeId, setDropTargetId]);
+
+  // 每次渲染后更新 applyProjectData 的 ref（供 doSave 冲突回退等异步路径调用）
+  React.useEffect(() => {
+    applyProjectDataRef.current = applyProjectData;
+  });
 
   // 空闲同步：本地无未保存改动时每 15s 拉一次，服务端有更新就热加载（多端保持最新）
   React.useEffect(() => {
@@ -1580,7 +1619,12 @@ export default function MindMap() {
           <button onClick={() => handleExport('json')} className="btn btn-outline btn-sm" title="复制项目 JSON 到剪贴板（留档）">
             复制 JSON
           </button>
-          <span className={`save-status ${copyMsg ? 'save-status-saving' : `save-status-${saveStatus}`}`}>
+          <span
+            className={`save-status ${copyMsg ? 'save-status-saving' : `save-status-${saveStatus}`}`}
+            onClick={saveStatus === 'error' ? doSave : undefined}
+            style={saveStatus === 'error' ? { cursor: 'pointer', textDecoration: 'underline' } : undefined}
+            title={saveStatus === 'error' ? '点击立即重试保存' : undefined}
+          >
             {copyMsg || (
               <>
                 {saveStatus === 'saved' && (lastSavedAt ? `已自动保存 ${formatTime(lastSavedAt)}` : '已自动保存')}
