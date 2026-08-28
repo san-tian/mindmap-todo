@@ -588,7 +588,8 @@
    自定义节点：白卡 / 扁平文字 + 状态左色条
    ============================================================ */
 .node {
-  padding: 5px 9px;
+  position: relative;
+  padding: 5px 9px 5px 13px;
   border-radius: 8px;
   border: 1px solid transparent;
   min-width: auto;
@@ -602,7 +603,17 @@
   background: rgba(37, 99, 235, 0.05);
 }
 
-/* 二级节点（根的直接子级）：白卡，区分层级 */
+/* 分支色条：标识节点归属的二级 task 分支（每个 task 不同色） */
+.branch-bar {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  border-radius: 2px;
+}
+
+/* 二级节点（根的直接子级 = task）：白卡，区分层级 */
 .node.node-level-1 {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -614,26 +625,13 @@
   box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08);
 }
 
-/* 运行中：左侧绿色条（inset 阴影实现，不影响布局） */
-.node.node-status-running:not(.node-root) {
-  background: #f3fdf9;
-  box-shadow: inset 2.5px 0 0 0 var(--c-running);
+/* 运行中/等待中（仅叶子）：淡色底，状态由图标颜色体现，归属由分支色条体现 */
+.node.node-status-running:not(.node-level-1):not(.node-root) {
+  background: #f0fdf6;
 }
 
-.node.node-status-running.node-level-1 {
-  background: var(--surface);
-  box-shadow: inset 2.5px 0 0 0 var(--c-running), var(--shadow-sm);
-}
-
-/* 等待中：左侧蓝条 */
-.node.node-status-waiting:not(.node-root) {
-  background: #f6f9ff;
-  box-shadow: inset 2.5px 0 0 0 var(--c-waiting);
-}
-
-.node.node-status-waiting.node-level-1 {
-  background: var(--surface);
-  box-shadow: inset 2.5px 0 0 0 var(--c-waiting), var(--shadow-sm);
+.node.node-status-waiting:not(.node-level-1):not(.node-root) {
+  background: #f5f8ff;
 }
 
 /* 待办：扁平文字（level-1 仍是白卡） */
@@ -664,6 +662,12 @@
 
 .node-label-idel {
   color: var(--ink-3);
+}
+
+/* 二级 task 标题：分支色 + 加粗 */
+.node-label-branch {
+  font-weight: 600;
+  color: var(--branch-color, var(--ink-1));
 }
 
 /* 拖拽时的目标节点高亮 */

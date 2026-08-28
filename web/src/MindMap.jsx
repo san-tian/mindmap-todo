@@ -85,6 +85,9 @@ const edgeKey = (e) => `${e.source}->${e.target}`;
 // —— 导出：文字版 Markdown 与 JSON 留档 ——
 const STATUS_MARKS = { running: '▶', waiting: '⏳', pending: '○', idel: '⏸', done: '✓', context: 'ℹ' };
 
+// 二级 task 分支配色：每个 task 按顺序循环取色，其子孙继承（左色条标识归属）
+const BRANCH_COLORS = ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#0ea5e9', '#84cc16'];
+
 const buildMarkdown = (nodes, edges, name) => {
   const byId = new Map(nodes.map(n => [n.id, n]));
   const children = new Map();
@@ -410,27 +413,35 @@ function CustomNode({ data, id }) {
 
   const status = data.status || 'pending';
   const isLevel1 = data.level === 1;
+  const isLeaf = !!data.isLeaf;
+  // 只有叶子节点才有状态；根（project 名）与中间节点不显示状态
+  const showStatus = isLeaf && !isRoot;
+  const branchColor = data.branchColor;
 
   return (
     <>
       <Handle type="target" position={Position.Left} className="node-handle" />
       <div
-        className={`node node-status-${status} ${isRoot ? 'node-root' : ''} ${isLevel1 ? 'node-level-1' : ''} ${data.dropTarget ? 'node-drop-target' : ''} ${data.highlight ? 'node-highlight' : ''}`}
+        className={`node ${showStatus ? `node-status-${status}` : ''} ${isRoot ? 'node-root' : ''} ${isLevel1 ? 'node-level-1' : ''} ${data.dropTarget ? 'node-drop-target' : ''} ${data.highlight ? 'node-highlight' : ''}`}
+        style={!isRoot && branchColor ? { '--branch-color': branchColor } : undefined}
         onDoubleClick={() => {
           if (!isRoot) setIsEditing(true);
         }}
       >
+        {!isRoot && branchColor && <span className="branch-bar" style={{ backgroundColor: branchColor }} />}
         <div className="node-header">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              manager.onStatusToggle(id);
-            }}
-            className="status-btn nodrag"
-            title="点击标记完成 / 未完成（R/P/D/C/W/I 可设具体状态）"
-          >
-            <StatusIcon status={status} />
-          </button>
+          {showStatus && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                manager.onStatusToggle(id);
+              }}
+              className="status-btn nodrag"
+              title="点击标记完成 / 未完成（R/P/D/C/W/I 可设具体状态）"
+            >
+              <StatusIcon status={status} />
+            </button>
+          )}
           {isEditing ? (
             <div className="node-edit-container">
               <input
@@ -454,7 +465,7 @@ function CustomNode({ data, id }) {
             </div>
           ) : (
             <div
-              className={`node-label node-label-${status}`}
+              className={`node-label ${showStatus ? `node-label-${status}` : ''} ${isLevel1 ? 'node-label-branch' : ''}`}
               onDoubleClick={() => { if (!isRoot) setIsEditing(true); }}
             >
               {label}
@@ -795,6 +806,8 @@ export default function MindMap() {
       // 检查是否是根节点
       const selectedNode = nodesRef.current.find(n => n.id === selectedNodeId);
       const isRootNode = selectedNode?.data?.isRoot || false;
+      // 只有叶子节点才有状态；中间节点（含二级 task 若有子任务）不响应状态快捷键
+      const isLeafSel = selectedNode ? !edgesRef.current.some(e => e.source === selectedNodeId) : false;
 
       // Enter：创建同级节点（根节点不允许）
       if (e.key === 'Enter') {
@@ -811,36 +824,42 @@ export default function MindMap() {
         return;
       }
 
-      // r / p / d：一键设置状态
+      // r / p / d：一键设置状态（仅叶子）
       if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
+        if (!isLeafSel) return;
         manager.onStatusChange(selectedNodeId, 'running');
         return;
       }
       if (e.key === 'p' || e.key === 'P') {
         e.preventDefault();
+        if (!isLeafSel) return;
         manager.onStatusChange(selectedNodeId, 'pending');
         return;
       }
       if (e.key === 'd' || e.key === 'D') {
         e.preventDefault();
+        if (!isLeafSel) return;
         manager.onStatusChange(selectedNodeId, 'done');
         return;
       }
       // c：上下文（项目描述，不计入 TODO）
       if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
+        if (!isLeafSel) return;
         manager.onStatusChange(selectedNodeId, 'context');
         return;
       }
       // w：等待中（等别人）；i：暂缓（暂时不用做）
       if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
+        if (!isLeafSel) return;
         manager.onStatusChange(selectedNodeId, 'waiting');
         return;
       }
       if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
+        if (!isLeafSel) return;
         manager.onStatusChange(selectedNodeId, 'idel');
         return;
       }
@@ -1537,7 +1556,12 @@ export default function MindMap() {
   const nodesForRender = React.useMemo(() => {
     // 计算每个节点的层级（根=0，其直接子级=1，以此类推）
     const parentOf = new Map();
-    edges.forEach(e => parentOf.set(e.target, e.source));
+    const childrenOf = new Map();
+    edges.forEach(e => {
+      parentOf.set(e.target, e.source);
+      if (!childrenOf.has(e.source)) childrenOf.set(e.source, []);
+      childrenOf.get(e.source).push(e.target);
+    });
     const levelMap = new Map();
     const getLevel = (id) => {
       if (levelMap.has(id)) return levelMap.get(id);
@@ -1548,6 +1572,25 @@ export default function MindMap() {
     };
     nodes.forEach(n => getLevel(n.id));
 
+    // 分支配色：每个根的直接子级（二级 task）按 y 顺序各取一色，其后代继承
+    const branchColorOf = new Map();
+    const yOf = (id) => nodes.find(n => n.id === id)?.position?.y ?? 0;
+    let ci = 0;
+    const assignBranch = (id, color) => {
+      branchColorOf.set(id, color);
+      (childrenOf.get(id) || []).forEach(c => assignBranch(c, color));
+    };
+    nodes
+      .filter(n => levelMap.get(n.id) === 0)
+      .forEach(root => {
+        (childrenOf.get(root.id) || [])
+          .sort((a, b) => yOf(a) - yOf(b))
+          .forEach(kid => {
+            assignBranch(kid, BRANCH_COLORS[ci % BRANCH_COLORS.length]);
+            ci++;
+          });
+      });
+
     return nodes.map(n => ({
       ...n,
       data: {
@@ -1555,6 +1598,8 @@ export default function MindMap() {
         dropTarget: n.id === dropTargetId,
         highlight: n.id === selectedNodeId,
         level: levelMap.get(n.id) || 0,
+        isLeaf: !childrenOf.has(n.id),
+        branchColor: branchColorOf.get(n.id),
       },
     }));
   }, [nodes, edges, dropTargetId, selectedNodeId]);
