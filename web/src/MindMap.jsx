@@ -1572,21 +1572,17 @@ export default function MindMap() {
     };
     nodes.forEach(n => getLevel(n.id));
 
-    // 分支配色：每个根的直接子级（二级 task）按 y 顺序各取一色，其后代继承
+    // 分支配色：只给二级 task（根的直接子级）按 y 顺序各取一色；子孙不继承、保持中性
     const branchColorOf = new Map();
     const yOf = (id) => nodes.find(n => n.id === id)?.position?.y ?? 0;
     let ci = 0;
-    const assignBranch = (id, color) => {
-      branchColorOf.set(id, color);
-      (childrenOf.get(id) || []).forEach(c => assignBranch(c, color));
-    };
     nodes
       .filter(n => levelMap.get(n.id) === 0)
       .forEach(root => {
         (childrenOf.get(root.id) || [])
           .sort((a, b) => yOf(a) - yOf(b))
           .forEach(kid => {
-            assignBranch(kid, BRANCH_COLORS[ci % BRANCH_COLORS.length]);
+            branchColorOf.set(kid, BRANCH_COLORS[ci % BRANCH_COLORS.length]);
             ci++;
           });
       });

@@ -589,7 +589,7 @@
    ============================================================ */
 .node {
   position: relative;
-  padding: 5px 9px 5px 13px;
+  padding: 5px 9px;
   border-radius: 8px;
   border: 1px solid transparent;
   min-width: auto;
@@ -613,8 +613,9 @@
   border-radius: 2px;
 }
 
-/* 二级节点（根的直接子级 = task）：白卡，区分层级 */
+/* 二级节点（根的直接子级 = task）：白卡 + 左色条，区分层级 */
 .node.node-level-1 {
+  padding-left: 13px;
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
