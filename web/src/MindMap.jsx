@@ -703,14 +703,23 @@ export default function MindMap() {
 
   // 自动保存到后端（防抖 1200ms）；带乐观锁 baseUpdatedAt，
   // 冲突时三方合并后由防抖通道自动重试，避免多端互覆盖
+  const savingRef = React.useRef(false); // in-flight 锁：同一时刻只允许一个保存请求，避免并发用旧 base 造成假冲突
   const doSave = React.useCallback(async () => {
     const pid = currentProjectIdRef.current;
     if (!pid) return;
+    if (savingRef.current) {
+      // 已有保存在进行：稍后再试（重新调度，不丢失改动）
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => { doSave(); }, 1200);
+      return;
+    }
+    savingRef.current = true;
     setSaveStatus('saving');
     try {
       const nodesToSave = nodesRef.current.map(sanitizeNode);
       const edgesToSave = edgesRef.current.map(e => ({ id: e.id, source: e.source, target: e.target }));
       const result = await storage.saveProject(pid, nodesToSave, edgesToSave, syncBaseRef.current.updatedAt);
+      savingRef.current = false;
       if (result.success) {
         syncBaseRef.current = { updatedAt: result.updatedAt, nodes: nodesToSave, edges: edgesToSave };
         dirtyRef.current = false;
@@ -737,6 +746,7 @@ export default function MindMap() {
         throw new Error(result.error || '保存失败');
       }
     } catch (error) {
+      savingRef.current = false;
       console.error('自动保存失败:', error);
       setSaveStatus('error');
       // 指数退避自动重试（最多 6 次），网络抖动后自动恢复；仍失败则保持 error 等用户点重试

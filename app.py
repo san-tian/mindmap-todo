@@ -276,6 +276,8 @@ def api_save_project(pid):
         base_updated_at = body.get('baseUpdatedAt')
         current = _load_project(pid)
         if current and base_updated_at and base_updated_at != current.get('updatedAt'):
+            print(f"[save] CONFLICT pid={pid} base={'有' if base_updated_at else '无'} "
+                  f"client_ver={base_updated_at} server_ver={current.get('updatedAt')} nodes={len(nodes)}", flush=True)
             return jsonify({
                 'success': False,
                 'conflict': True,
@@ -283,6 +285,7 @@ def api_save_project(pid):
                 'project': current,
             })
         p = _save_project(pid, nodes, edges)
+        print(f"[save] OK pid={pid} base={'有' if base_updated_at else '无'} nodes={len(nodes)}", flush=True)
         return jsonify({'success': True, 'updatedAt': p.get('updatedAt')})
     except ValueError:
         return jsonify({'success': False, 'error': 'invalid project id'}), 400
