@@ -234,35 +234,12 @@
   box-shadow: 0 0 0 1.5px var(--accent), 0 3px 10px var(--accent-ring) !important;
 }
 
-/* 连线：柔和的冷灰蓝 */
+/* 连线：统一中性冷灰蓝（状态只在叶子图标上体现，线不携带状态） */
 .react-flow__edge-path {
   stroke: var(--edge);
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: stroke 0.2s;
-}
-
-/* 运行中：绿色流动虚线，让画布“活”起来 */
-.react-flow__edge.edge-status-running .react-flow__edge-path {
-  stroke: var(--c-running);
-  stroke-dasharray: 7 5;
-  animation: edge-flow 0.9s linear infinite;
-}
-
-/* 已完成：淡化 */
-.react-flow__edge.edge-status-done .react-flow__edge-path {
-  stroke: var(--edge-done);
-}
-
-@keyframes edge-flow {
-  to { stroke-dashoffset: -12; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .react-flow__edge.edge-status-running .react-flow__edge-path {
-    animation: none;
-  }
 }
 
 /* ============================================================

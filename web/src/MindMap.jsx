@@ -1600,16 +1600,6 @@ export default function MindMap() {
     }));
   }, [nodes, edges, dropTargetId, selectedNodeId]);
 
-  // 边跟随源节点状态着色：running 绿色流动、done 淡化、其余冷灰蓝
-  const edgesForRender = React.useMemo(() => {
-    const statusById = new Map(nodes.map(n => [n.id, n.data?.status || 'pending']));
-    return edges.map(e => {
-      const s = statusById.get(e.source) || 'pending';
-      const color = s === 'running' ? '#10b981' : s === 'done' ? '#d9dfeb' : '#c3cddd';
-      return { ...e, className: `edge-status-${s}`, markerEnd: { ...e.markerEnd, color } };
-    });
-  }, [nodes, edges]);
-
   return (
     <div className="app">
       <div className="toolbar">
@@ -1720,7 +1710,7 @@ export default function MindMap() {
           ) : (
             <ReactFlow
               nodes={nodesForRender}
-              edges={edgesForRender}
+              edges={edges}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
