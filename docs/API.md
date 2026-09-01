@@ -50,6 +50,7 @@
 
 - **根节点**（一级节点）：没有入边的节点，其 `label` 即项目名。
 - 节点 `status`：`running`（进行中）/ `waiting`（等待中）/ `pending`（待办）/ `idel`（暂缓）/ `done`（完成）/ `context`（上下文/项目描述，不计入 TODO）。
+- **状态只在叶子节点**：只有叶子节点（没有子节点的节点）才有 `status` 且会在画布上显示状态图标；中间节点（有子节点，含二级 task）和根节点不显示状态。**API 对非叶子节点设置 status 会返回 400**（`只有叶子节点支持设置状态`）。
 
 ## 接口总览
 
@@ -120,6 +121,7 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 - 移动节点会自动做防环校验（不能移到自己的后代下面）。
 - 删除节点会递归删除整棵子树。
 - 节点 `status` 只接受 `running` / `waiting` / `pending` / `idel` / `done` / `context`。
+- **状态只在叶子节点**：对非叶子节点（有子节点）设置 status 会返回 400。
 - 节点 `quadrant`（四象限，可选）只接受 `q1`（重要紧急）/ `q2`（重要不紧急）/ `q3`（不重要紧急）/ `q4`（不重要不紧急）；传空值表示清除。
 - 节点自动记录 `createdAt`（创建时间）和 `doneAt`（变为 done 的时间；取消 done 时自动清除）。
 - 前端加载项目时会自动按当前规则重新排版，因此 API 写入的坐标只是初始值，不必精确。
@@ -152,6 +154,7 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 要点：
 - 节点可用稳定 `key`（存于 `data.key`）定位，便于脚本幂等；key 由你自定义，创建时带一次即可。
 - `status`：`running`/`waiting`/`pending`/`idel`/`done`/`context`；`quadrant`：`q1`~`q4`。
+- **状态只在叶子节点**：对已有中间节点（有子节点）设置 status 会返回 400；新建节点是叶子，可带 status。
 - 整批原子：任一 op 非法则整批不生效，返回 400 并附 `op[下标]` 错误。
 - 会自动防环（不能挂到自身或后代下）、递归删子树、记录 `createdAt`/`doneAt`。
 

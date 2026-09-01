@@ -160,6 +160,11 @@ def _collect_subtree(edges, nid):
     return to_delete
 
 
+def _is_leaf(edges, nid):
+    """节点是否是叶子（没有任何子节点）。状态只在叶子节点有意义。"""
+    return not any(e['source'] == nid for e in edges)
+
+
 def _migrate_legacy():
     """把旧版 data/mindmap.json 迁移到多项目目录（仅当尚无项目且旧数据非空时）"""
     _ensure_dirs()
@@ -409,6 +414,9 @@ def api_update_node(pid, nid):
         if 'label' in body:
             node['data']['label'] = (body['label'] or '').strip() or node['data'].get('label', '')
         if body.get('status') in ('running', 'pending', 'done', 'context', 'waiting', 'idel'):
+            # 只有叶子节点才有状态；中间节点（有子节点）不支持
+            if not _is_leaf(p.get('edges', []), nid):
+                return jsonify({'success': False, 'error': '只有叶子节点支持设置状态（中间节点不显示状态）'}), 400
             prev = node['data'].get('status')
             if body['status'] == 'done' and prev != 'done':
                 node['data']['doneAt'] = _now()
@@ -637,6 +645,9 @@ def api_agent_edit(pid):
                 if 'label' in op:
                     node['data']['label'] = (op.get('label') or '').strip() or node['data'].get('label', '')
                 if op.get('status') in VALID_STATUSES:
+                    # 只有叶子节点才有状态；中间节点（有子节点）不支持
+                    if not _is_leaf(edges, node['id']):
+                        return jsonify({'success': False, 'error': f'op[{idx}]: 只有叶子节点支持设置状态（中间节点不显示状态）'}), 400
                     apply_status(node, op['status'])
                 if 'quadrant' in op:
                     if op.get('quadrant') in QUADRANT_KEYS:
