@@ -132,38 +132,28 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 |------|------|------|
 | GET | `/api/agent/projects` | 列出项目（同 `/api/projects`） |
 | GET | `/api/agent/projects/<pid>` | 获取项目 JSON；`?format=markdown` 返回文字版 |
-| POST | `/api/agent/projects/<pid>/tasks` | **添加任务**（单一 `text` 字段，推荐给 LLM 用） |
 | POST | `/api/agent/projects/<pid>/edit` | 批量编辑 `{ops:[...], baseUpdatedAt?}` |
 
-### 添加任务（推荐给 agent/LLM）
-
-```bash
-# 唯一必填字段是 text（任务内容）；其余都可选，字段映射全部由后端完成
-curl -X POST $BASE/api/agent/projects/<pid>/tasks \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"依赖安装","status":"pending","parent_id":"2"}'
-```
-
-字段：
-- `text`（必填）= 任务内容（也接受 `content` 别名）
-- `status`（可选）= pending/running/waiting/idel/done/context，默认 pending
-- `parent_id` / `parent_key`（可选）= 父节点，缺省挂根节点
-- `key`（可选）= 幂等标识；给定时若已存在则**更新**而非新建
-- `quadrant`（可选）= q1~q4
-
-响应：`{success, node, updatedAt, project}`（node 为新建/更新后的节点）。
-
 ### 批量编辑 ops
+
+字段命名直白化（旧名仍兼容）：
+
+| 语义 | 直白名（推荐） | 兼容旧名 |
+|------|--------------|---------|
+| 任务内容 | `text` | `label` |
+| 幂等标识（可选） | `id_key` | `key` |
+| 父节点 id | `parent_id` | `parentId` |
+| 父节点 key | `parent_key` | `parentKey` |
 
 ```jsonc
 {
   "ops": [
-    // upsert：按 key（或 id）查找；命中则更新，未命中则创建（挂到 parent 下）
-    { "op": "upsert", "key": "deps", "label": "依赖安装", "status": "running", "parentId": "2", "quadrant": "q2" },
-    // parent 也可以用 parentKey 定位；缺省 = 根节点
-    { "op": "upsert", "key": "deploy", "label": "部署上线", "parentKey": "deps" },
+    // upsert：按 id_key（或 id）查找；命中则更新，未命中则创建（挂到 parent 下）
+    { "op": "upsert", "id_key": "deps", "text": "依赖安装", "status": "running", "parent_id": "2", "quadrant": "q2" },
+    // 父节点也可以用 parent_key 定位；缺省 = 根节点
+    { "op": "upsert", "id_key": "deploy", "text": "部署上线", "parent_key": "deps" },
     // delete：删除节点及其整棵子树
-    { "op": "delete", "key": "deploy" }
+    { "op": "delete", "id_key": "deploy" }
   ],
   // 可选：乐观锁。与服务端 updatedAt 不一致时返回 {success:false, conflict:true, project:...}
   "baseUpdatedAt": "2026-08-24T07:00:00+00:00"
@@ -171,8 +161,8 @@ curl -X POST $BASE/api/agent/projects/<pid>/tasks \
 ```
 
 要点：
-- 节点可用稳定 `key`（存于 `data.key`）定位，便于脚本幂等；key 由你自定义，创建时带一次即可。
-- `label` 也接受 `text` 别名（任务内容更直白）；`parentId` 也接受 `parent_id`。
+- `text` = 任务内容（唯一真正需要 LLM 理解的字段）；`id_key` = 稳定幂等标识，给定后按它查找更新而非新建。
+- `parent_id` / `parent_key` 缺省挂根节点；`status`：`running`/`waiting`/`pending`/`idel`/`done`/`context`；`quadrant`：`q1`~`q4`。
 - `status`：`running`/`waiting`/`pending`/`idel`/`done`/`context`；`quadrant`：`q1`~`q4`。
 - **状态只在叶子节点**：对已有中间节点（有子节点）设置 status 会返回 400；新建节点是叶子，可带 status。
 - 整批原子：任一 op 非法则整批不生效，返回 400 并附 `op[下标]` 错误。
@@ -191,7 +181,7 @@ BASE_VER=$(echo "$P" | python3 -c 'import json,sys; print(json.load(sys.stdin)["
 # 2. 批量改（带版本号，防与网页端互覆盖）
 curl -s -X POST $BASE/api/agent/projects/$PID/edit \
   -H 'Content-Type: application/json' \
-  -d "{\"ops\":[{\"op\":\"upsert\",\"key\":\"report\",\"label\":\"写周报\",\"status\":\"running\"}],\"baseUpdatedAt\":\"$BASE_VER\"}"
+  -d "{\"ops\":[{\"op\":\"upsert\",\"id_key\":\"report\",\"text\":\"写周报\",\"status\":\"running\"}],\"baseUpdatedAt\":\"$BASE_VER\"}"
 ```
 
 ## 导出（留档）

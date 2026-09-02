@@ -175,6 +175,15 @@ def _apply_status(node, status):
     node.setdefault('data', {})['status'] = status
 
 
+def _first_present(d, *keys):
+    """返回字典 d 中第一个存在（非 None）的字段值，用于「新直白名优先、旧名兼容」。"""
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            return v
+    return None
+
+
 def _migrate_legacy():
     """把旧版 data/mindmap.json 迁移到多项目目录（仅当尚无项目且旧数据非空时）"""
     _ensure_dirs()
@@ -629,24 +638,29 @@ def api_agent_edit(pid):
     for idx, op in enumerate(ops):
         kind = op.get('op')
         if kind == 'upsert':
-            node = _find_node(nodes, {'id': op.get('id'), 'key': op.get('key')})
-            has_parent = op.get('parentId') is not None or op.get('parentKey') is not None
-            parent = _find_node(nodes, {'id': op.get('parentId'), 'key': op.get('parentKey')}) if has_parent else None
+            node_key = _first_present(op, 'id_key', 'key')
+            node = _find_node(nodes, {'id': op.get('id'), 'key': node_key})
+            parent_id = _first_present(op, 'parent_id', 'parentId')
+            parent_key = _first_present(op, 'parent_key', 'parentKey')
+            has_parent = parent_id is not None or parent_key is not None
+            parent = _find_node(nodes, {'id': parent_id, 'key': parent_key}) if has_parent else None
 
             if node is None:
-                # text 是 label 的语义别名（agent 场景「任务内容」更直白）
-                label = (op.get('label') or op.get('text') or '').strip() or '新任务'
+                # text = 任务内容（直白主名），label 为兼容别名
+                text = _first_present(op, 'text', 'label')
+                label = (text or '').strip() or '新任务'
                 status = op.get('status') if op.get('status') in VALID_STATUSES else 'pending'
                 data = {'label': label, 'status': status, 'createdAt': _now()}
-                if op.get('key'):
-                    data['key'] = op['key']
+                if node_key:
+                    data['key'] = node_key
                 if op.get('quadrant') in QUADRANT_KEYS:
                     data['quadrant'] = op['quadrant']
                 node = {'id': next_id(), 'type': 'custom', 'position': {'x': 50, 'y': 250}, 'data': data}
                 nodes.append(node)
             else:
-                if 'label' in op or 'text' in op:
-                    node['data']['label'] = (op.get('label') or op.get('text') or '').strip() or node['data'].get('label', '')
+                if 'text' in op or 'label' in op:
+                    text = _first_present(op, 'text', 'label')
+                    node['data']['label'] = (text or '').strip() or node['data'].get('label', '')
                 if op.get('status') in VALID_STATUSES:
                     # 只有叶子节点才有状态；中间节点（有子节点）不支持
                     if not _is_leaf(edges, node['id']):
@@ -657,8 +671,8 @@ def api_agent_edit(pid):
                         node['data']['quadrant'] = op['quadrant']
                     else:
                         node['data'].pop('quadrant', None)
-                if op.get('key'):
-                    node['data']['key'] = op['key']
+                if node_key:
+                    node['data']['key'] = node_key
 
             if parent:
                 if parent['id'] == node['id']:
@@ -669,7 +683,7 @@ def api_agent_edit(pid):
                 edges.append({'id': f'e{parent["id"]}-{node["id"]}', 'source': parent['id'], 'target': node['id'], 'type': 'default', 'markerEnd': {'type': 'arrowclosed'}})
 
         elif kind == 'delete':
-            node = _find_node(nodes, {'id': op.get('id'), 'key': op.get('key')})
+            node = _find_node(nodes, {'id': op.get('id'), 'key': _first_present(op, 'id_key', 'key')})
             if not node:
                 return jsonify({'success': False, 'error': f'op[{idx}]: 节点不存在'}), 400
             to_delete = _collect_subtree(edges, node['id'])
@@ -681,79 +695,6 @@ def api_agent_edit(pid):
 
     p = _save_project(pid, nodes, edges)
     return jsonify({'success': True, 'updatedAt': p.get('updatedAt'), 'project': p})
-
-
-@app.route('/api/agent/projects/<pid>/tasks', methods=['POST'])
-def api_agent_add_task(pid):
-    """直白的「添加任务」接口：单一 text 字段 = 任务内容，消除 label/key 歧义。
-
-    body: {text(必填), status?, parent_id?, parent_key?, key?, quadrant?}
-    - text: 任务内容（唯一必填字段）
-    - status: pending/running/waiting/idel/done/context，默认 pending
-    - parent_id / parent_key: 父节点（缺省 = 根节点）
-    - key: 可选幂等标识；给定时若已存在则更新而非新建
-
-    这是 upsert 的「LLM 友好」简化版：agent 只需传一个任务文本字段，
-    字段映射全部由后端完成，不会把项目名/任务内容填错位置。
-    """
-    p = _load_project(pid)
-    if not p:
-        return jsonify({'success': False, 'error': 'project not found'}), 404
-    body = request.get_json(silent=True) or {}
-    text = (body.get('text') or body.get('content') or '').strip()
-    if not text:
-        return jsonify({'success': False, 'error': 'text 必填（任务内容）'}), 400
-
-    nodes = p.get('nodes', [])
-    edges = p.get('edges', [])
-
-    def next_id():
-        mx = 0
-        for n in nodes:
-            try:
-                mx = max(mx, int(n['id']))
-            except (ValueError, TypeError):
-                pass
-        return str(mx + 1)
-
-    # 幂等：给了 key 且已存在 → 更新该节点（而非新建）
-    node = _find_node(nodes, {'key': body.get('key')}) if body.get('key') else None
-    has_parent = body.get('parent_id') is not None or body.get('parent_key') is not None
-    parent = _find_node(nodes, {'id': body.get('parent_id'), 'key': body.get('parent_key')}) if has_parent else None
-
-    if node is None:
-        status = body.get('status') if body.get('status') in VALID_STATUSES else 'pending'
-        data = {'label': text, 'status': status, 'createdAt': _now()}
-        if body.get('key'):
-            data['key'] = body['key']
-        if body.get('quadrant') in QUADRANT_KEYS:
-            data['quadrant'] = body['quadrant']
-        node = {'id': next_id(), 'type': 'custom', 'position': {'x': 50, 'y': 250}, 'data': data}
-        nodes.append(node)
-    else:
-        node['data']['label'] = text
-        if body.get('status') in VALID_STATUSES:
-            if not _is_leaf(edges, node['id']):
-                return jsonify({'success': False, 'error': '只有叶子节点支持设置状态（中间节点不显示状态）'}), 400
-            _apply_status(node, body['status'])
-        if body.get('key'):
-            node['data']['key'] = body['key']
-        if 'quadrant' in body:
-            if body.get('quadrant') in QUADRANT_KEYS:
-                node['data']['quadrant'] = body['quadrant']
-            else:
-                node['data'].pop('quadrant', None)
-
-    if parent:
-        if parent['id'] == node['id']:
-            return jsonify({'success': False, 'error': '不能挂到自身下'}), 400
-        if parent['id'] in _collect_subtree(edges, node['id']):
-            return jsonify({'success': False, 'error': '不能挂到自身后代下'}), 400
-        edges[:] = [e for e in edges if e['target'] != node['id']]
-        edges.append({'id': f'e{parent["id"]}-{node["id"]}', 'source': parent['id'], 'target': node['id'], 'type': 'default', 'markerEnd': {'type': 'arrowclosed'}})
-
-    p = _save_project(pid, nodes, edges)
-    return jsonify({'success': True, 'node': node, 'updatedAt': p.get('updatedAt'), 'project': p})
 
 
 @app.route('/api/health', methods=['GET'])
