@@ -110,7 +110,7 @@ def _project_to_markdown(p):
         children.setdefault(e['source'], []).append(e['target'])
     for k in children:
         children[k].sort(key=lambda tid: (by_id.get(tid, {}).get('position') or {}).get('y', 0))
-    root_ids = [n['id'] for n in nodes if not any(e['target'] == n['id'] for e in edges)]
+    root_ids = [n['id'] for n in _root_nodes(edges, nodes)]
     root_ids.sort(key=lambda rid: (by_id.get(rid, {}).get('position') or {}).get('y', 0))
 
     name = p.get('name') or '未命名项目'
@@ -145,6 +145,17 @@ def _find_node(nodes, ref):
     if ref.get('key') is not None:
         return next((n for n in nodes if n.get('data', {}).get('key') == ref['key']), None)
     return None
+
+
+def _root_nodes(edges, nodes):
+    """返回所有根节点（无入边的节点）。"""
+    return [n for n in nodes if not any(e['target'] == n['id'] for e in edges)]
+
+
+def _find_root(nodes, edges):
+    """返回项目根节点（无入边节点）；正常单根返回唯一根，无根返回 None。"""
+    roots = _root_nodes(edges, nodes)
+    return roots[0] if roots else None
 
 
 def _collect_subtree(edges, nid):
@@ -648,7 +659,7 @@ def api_agent_edit(pid):
             if node is None:
                 # 新建：parent 缺省 = 挂到项目根节点（无入边的既有节点）
                 if parent is None:
-                    parent = next((n for n in nodes if not any(e['target'] == n['id'] for e in edges)), None)
+                    parent = _find_root(nodes, edges)
                 # text = 任务内容（直白主名），label 为兼容别名
                 text = _first_present(op, 'text', 'label')
                 label = (text or '').strip() or '新任务'
