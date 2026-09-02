@@ -10,10 +10,12 @@
 
 ## 功能特性
 
+- 🗂️ **多项目**：每张导图独立成项目，支持创建 / 重命名 / 删除
 - 🌳 **无限层级思维导图**：树状结构，自动布局，支持任意深度
 - ✏️ **即时编辑**：双击节点编辑文字，点击切换状态
-- ✅ **状态管理**：running（进行中）/ pending（待办）/ done（完成）/ context（上下文，不计入待办）四种状态
-- 📋 **自动任务列表**：所有叶子节点按 running / pending / done 分栏自动生成清单，另有时间视图
+- ✅ **状态管理**：running（进行中）/ waiting（等待中）/ pending（待办）/ idel（暂缓）/ done（完成）/ context（上下文）六种状态
+- 🎯 **四象限**：节点可标 q1（重要紧急）~ q4（不重要不紧急）
+- 📋 **自动任务列表**：叶子节点按状态分栏自动生成清单，另有时间视图
 - 💾 **云端自动保存**：改动后自动保存到后端（防抖 1200ms），无需手动点击
 - 🎨 **现代 UI**：基于 Tailwind CSS 和 Shadcn/ui 组件
 
@@ -126,64 +128,41 @@ docker compose down            # 停止（数据仍在 ./data）
 
 ### 保存数据
 
-数据**自动保存**到后端：停止操作约 1.2 秒后自动写入 `data/mindmap.json`，无需手动点击。
+数据**自动保存**到后端：停止操作约 1.2 秒后自动写入 `data/projects/<项目id>.json`，无需手动点击。
 顶栏实时显示保存状态：待保存 / 保存中 / 已自动保存（时间）/ 保存失败（可点击重试）。
 顶部"保存"按钮保留，用于手动立即保存。
 
 ## API 接口
 
-### GET /api/mindmap
-获取思维导图数据
+完整接口文档见 [docs/API.md](docs/API.md)。所有响应带 `success: true/false`，失败附 `error`。
 
-**响应示例：**
+### 核心接口（多项目）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/projects` | 列出所有项目 |
+| POST | `/api/projects` | 创建项目 `{name}` |
+| GET | `/api/projects/<pid>` | 获取项目完整数据 |
+| POST | `/api/projects/<pid>` | 保存项目 `{nodes, edges, baseUpdatedAt?}` |
+| PATCH | `/api/projects/<pid>` | 重命名项目 `{name}` |
+| DELETE | `/api/projects/<pid>` | 删除项目 |
+| POST | `/api/projects/<pid>/nodes` | 新增节点 `{label, parentId?, status?}` |
+| PATCH | `/api/projects/<pid>/nodes/<nid>` | 更新节点 `{label?, status?}` |
+| DELETE | `/api/projects/<pid>/nodes/<nid>` | 删除节点及其子树 |
+| POST | `/api/projects/<pid>/nodes/<nid>/move` | 移动节点 `{parentId}` |
+
+### Agent 接口（面向脚本 / agent，无鉴权）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/agent/projects` | 列出项目 |
+| GET | `/api/agent/projects/<pid>` | 获取项目；`?format=markdown` 返回文字版 |
+| POST | `/api/agent/projects/<pid>/edit` | 批量编辑 `{ops:[...]}` |
+
+批量编辑示例（字段命名直白化：`text` = 任务内容，`id_key` = 幂等标识）：
+
 ```json
-{
-  "success": true,
-  "data": {
-    "nodes": [
-      {
-        "id": "1",
-        "type": "custom",
-        "position": {"x": 250, "y": 50},
-        "data": {
-          "label": "我的工作",
-          "status": "pending"
-        }
-      }
-    ],
-    "edges": []
-  }
-}
-```
-
-### POST /api/mindmap
-保存思维导图数据
-
-**请求体：**
-```json
-{
-  "nodes": [...],
-  "edges": [...]
-}
-```
-
-### GET /api/mindmap/todos
-获取待办事项列表
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "todos": [
-    {
-      "id": "3",
-      "data": {
-        "label": "完成需求文档",
-        "status": "pending"
-      }
-    }
-  ]
-}
+{"ops":[{"op":"upsert","text":"任务内容","status":"pending"},{"op":"delete","id":"节点id"}]}
 ```
 
 ## 项目结构
@@ -192,34 +171,39 @@ docker compose down            # 停止（数据仍在 ./data）
 mindmap-todo/
 ├── app.py              # Flask 后端服务器
 ├── data/
-│   └── mindmap.json    # 数据存储
-├── web/
+│   ├── projects/       # 每个项目一个 JSON 文件
+│   │   └── <项目id>.json
+│   └── settings.json   # 全局设置
+├── docs/
+│   └── API.md          # 完整接口文档
+├── web/                # React 前端（Vite 构建）
 │   ├── src/
-│   │   ├── pages/
-│   │   │   └── MindMap.jsx       # 主应用组件
-│   │   ├── components/
-│   │   │   └── ui/               # Shadcn/ui 组件
-│   │   └── main.jsx              # 入口文件
+│   │   ├── MindMap.jsx         # 主应用组件
+│   │   ├── components/ui/      # Shadcn/ui 组件
+│   │   └── main.jsx            # 入口文件
 │   ├── package.json
 │   └── vite.config.js
-├── venv/               # Python 虚拟环境
 └── README.md
 ```
 
 ## 数据格式
 
-思维导图数据以 React Flow 格式存储：
+思维导图数据以 React Flow 格式存储，每个项目一个文件：
 
 ```json
 {
+  "id": "e0470148",
+  "name": "项目名",
   "nodes": [
     {
-      "id": "唯一ID",
+      "id": "1",
       "type": "custom",
       "position": {"x": 100, "y": 100},
       "data": {
         "label": "节点文字",
-        "status": "pending | done"
+        "status": "pending",
+        "createdAt": "2026-08-19T06:57:05Z",
+        "quadrant": "q2"
       }
     }
   ],
@@ -228,11 +212,15 @@ mindmap-todo/
       "id": "e1-2",
       "source": "1",
       "target": "2",
-      "type": "smoothstep"
+      "type": "default"
     }
   ]
 }
 ```
+
+- 根节点（无入边的节点）的 `label` 即项目名。
+- `status`：`running` / `waiting` / `pending` / `idel` / `done` / `context`。
+- `quadrant`（可选四象限）：`q1` 重要紧急 / `q2` 重要不紧急 / `q3` 不重要紧急 / `q4` 不重要不紧急。
 
 ## 开发
 
