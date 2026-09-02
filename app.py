@@ -165,6 +165,16 @@ def _is_leaf(edges, nid):
     return not any(e['source'] == nid for e in edges)
 
 
+def _apply_status(node, status):
+    """设置节点状态，并自动维护 doneAt（done 记录完成时间，取消 done 时清除）。"""
+    prev = node.get('data', {}).get('status')
+    if status == 'done' and prev != 'done':
+        node.setdefault('data', {})['doneAt'] = _now()
+    elif status != 'done' and prev == 'done':
+        node.get('data', {}).pop('doneAt', None)
+    node.setdefault('data', {})['status'] = status
+
+
 def _migrate_legacy():
     """把旧版 data/mindmap.json 迁移到多项目目录（仅当尚无项目且旧数据非空时）"""
     _ensure_dirs()
@@ -616,14 +626,6 @@ def api_agent_edit(pid):
                 pass
         return str(mx + 1)
 
-    def apply_status(node, status):
-        prev = node.get('data', {}).get('status')
-        if status == 'done' and prev != 'done':
-            node.setdefault('data', {})['doneAt'] = _now()
-        elif status != 'done' and prev == 'done':
-            node.get('data', {}).pop('doneAt', None)
-        node.setdefault('data', {})['status'] = status
-
     for idx, op in enumerate(ops):
         kind = op.get('op')
         if kind == 'upsert':
@@ -632,7 +634,8 @@ def api_agent_edit(pid):
             parent = _find_node(nodes, {'id': op.get('parentId'), 'key': op.get('parentKey')}) if has_parent else None
 
             if node is None:
-                label = (op.get('label') or '').strip() or '新任务'
+                # text 是 label 的语义别名（agent 场景「任务内容」更直白）
+                label = (op.get('label') or op.get('text') or '').strip() or '新任务'
                 status = op.get('status') if op.get('status') in VALID_STATUSES else 'pending'
                 data = {'label': label, 'status': status, 'createdAt': _now()}
                 if op.get('key'):
@@ -642,13 +645,13 @@ def api_agent_edit(pid):
                 node = {'id': next_id(), 'type': 'custom', 'position': {'x': 50, 'y': 250}, 'data': data}
                 nodes.append(node)
             else:
-                if 'label' in op:
-                    node['data']['label'] = (op.get('label') or '').strip() or node['data'].get('label', '')
+                if 'label' in op or 'text' in op:
+                    node['data']['label'] = (op.get('label') or op.get('text') or '').strip() or node['data'].get('label', '')
                 if op.get('status') in VALID_STATUSES:
                     # 只有叶子节点才有状态；中间节点（有子节点）不支持
                     if not _is_leaf(edges, node['id']):
                         return jsonify({'success': False, 'error': f'op[{idx}]: 只有叶子节点支持设置状态（中间节点不显示状态）'}), 400
-                    apply_status(node, op['status'])
+                    _apply_status(node, op['status'])
                 if 'quadrant' in op:
                     if op.get('quadrant') in QUADRANT_KEYS:
                         node['data']['quadrant'] = op['quadrant']
@@ -678,6 +681,79 @@ def api_agent_edit(pid):
 
     p = _save_project(pid, nodes, edges)
     return jsonify({'success': True, 'updatedAt': p.get('updatedAt'), 'project': p})
+
+
+@app.route('/api/agent/projects/<pid>/tasks', methods=['POST'])
+def api_agent_add_task(pid):
+    """直白的「添加任务」接口：单一 text 字段 = 任务内容，消除 label/key 歧义。
+
+    body: {text(必填), status?, parent_id?, parent_key?, key?, quadrant?}
+    - text: 任务内容（唯一必填字段）
+    - status: pending/running/waiting/idel/done/context，默认 pending
+    - parent_id / parent_key: 父节点（缺省 = 根节点）
+    - key: 可选幂等标识；给定时若已存在则更新而非新建
+
+    这是 upsert 的「LLM 友好」简化版：agent 只需传一个任务文本字段，
+    字段映射全部由后端完成，不会把项目名/任务内容填错位置。
+    """
+    p = _load_project(pid)
+    if not p:
+        return jsonify({'success': False, 'error': 'project not found'}), 404
+    body = request.get_json(silent=True) or {}
+    text = (body.get('text') or body.get('content') or '').strip()
+    if not text:
+        return jsonify({'success': False, 'error': 'text 必填（任务内容）'}), 400
+
+    nodes = p.get('nodes', [])
+    edges = p.get('edges', [])
+
+    def next_id():
+        mx = 0
+        for n in nodes:
+            try:
+                mx = max(mx, int(n['id']))
+            except (ValueError, TypeError):
+                pass
+        return str(mx + 1)
+
+    # 幂等：给了 key 且已存在 → 更新该节点（而非新建）
+    node = _find_node(nodes, {'key': body.get('key')}) if body.get('key') else None
+    has_parent = body.get('parent_id') is not None or body.get('parent_key') is not None
+    parent = _find_node(nodes, {'id': body.get('parent_id'), 'key': body.get('parent_key')}) if has_parent else None
+
+    if node is None:
+        status = body.get('status') if body.get('status') in VALID_STATUSES else 'pending'
+        data = {'label': text, 'status': status, 'createdAt': _now()}
+        if body.get('key'):
+            data['key'] = body['key']
+        if body.get('quadrant') in QUADRANT_KEYS:
+            data['quadrant'] = body['quadrant']
+        node = {'id': next_id(), 'type': 'custom', 'position': {'x': 50, 'y': 250}, 'data': data}
+        nodes.append(node)
+    else:
+        node['data']['label'] = text
+        if body.get('status') in VALID_STATUSES:
+            if not _is_leaf(edges, node['id']):
+                return jsonify({'success': False, 'error': '只有叶子节点支持设置状态（中间节点不显示状态）'}), 400
+            _apply_status(node, body['status'])
+        if body.get('key'):
+            node['data']['key'] = body['key']
+        if 'quadrant' in body:
+            if body.get('quadrant') in QUADRANT_KEYS:
+                node['data']['quadrant'] = body['quadrant']
+            else:
+                node['data'].pop('quadrant', None)
+
+    if parent:
+        if parent['id'] == node['id']:
+            return jsonify({'success': False, 'error': '不能挂到自身下'}), 400
+        if parent['id'] in _collect_subtree(edges, node['id']):
+            return jsonify({'success': False, 'error': '不能挂到自身后代下'}), 400
+        edges[:] = [e for e in edges if e['target'] != node['id']]
+        edges.append({'id': f'e{parent["id"]}-{node["id"]}', 'source': parent['id'], 'target': node['id'], 'type': 'default', 'markerEnd': {'type': 'arrowclosed'}})
+
+    p = _save_project(pid, nodes, edges)
+    return jsonify({'success': True, 'node': node, 'updatedAt': p.get('updatedAt'), 'project': p})
 
 
 @app.route('/api/health', methods=['GET'])
