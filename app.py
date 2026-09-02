@@ -646,6 +646,9 @@ def api_agent_edit(pid):
             parent = _find_node(nodes, {'id': parent_id, 'key': parent_key}) if has_parent else None
 
             if node is None:
+                # 新建：parent 缺省 = 挂到项目根节点（无入边的既有节点）
+                if parent is None:
+                    parent = next((n for n in nodes if not any(e['target'] == n['id'] for e in edges)), None)
                 # text = 任务内容（直白主名），label 为兼容别名
                 text = _first_present(op, 'text', 'label')
                 label = (text or '').strip() or '新任务'
