@@ -174,10 +174,41 @@ class MindMapManager {
     this.getNodes = () => [];
     this.getEdges = () => [];
     this.nodeIdCounter = { current: 1 };
+    this.undoStack = [];            // 撤销快照栈
+    this.onUndoStackChange = null;  // 撤销栈长度变化回调（组件据此启用/禁用撤销按钮）
+  }
+
+  pushUndo() {
+    const nodes = this.getNodes();
+    const edges = this.getEdges();
+    this.undoStack.push({
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges)),
+    });
+    if (this.undoStack.length > 50) this.undoStack.shift(); // 限制深度
+    this.onUndoStackChange?.(this.undoStack.length);
+  }
+
+  undo() {
+    const snapshot = this.undoStack.pop();
+    if (!snapshot || !this.setNodes || !this.setEdges) {
+      this.onUndoStackChange?.(this.undoStack.length);
+      return false;
+    }
+    this.setNodes(snapshot.nodes);
+    this.setEdges(snapshot.edges);
+    // 恢复 nodeIdCounter，避免后续新增节点 id 冲突
+    const maxId = snapshot.nodes.reduce((m, n) => Math.max(m, parseInt(n.id) || 0), 0);
+    this.nodeIdCounter.current = maxId + 1;
+    // 恢复后按当前规则重排（不 fitView，保持视野）
+    setTimeout(() => this.autoLayout?.(false), 50);
+    this.onUndoStackChange?.(this.undoStack.length);
+    return true;
   }
 
   onLabelChange(nodeId, newLabel) {
     if (!this.setNodes) return;
+    this.pushUndo();
     this.setNodes(nds => nds.map(n =>
       n.id === nodeId ? { ...n, data: { ...n.data, label: newLabel } } : n
     ));
@@ -187,6 +218,7 @@ class MindMapManager {
 
   onStatusChange(nodeId, status) {
     if (!this.setNodes) return;
+    this.pushUndo();
     const now = new Date().toISOString();
     this.setNodes(nds => nds.map(n => {
       if (n.id !== nodeId) return n;
@@ -210,6 +242,7 @@ class MindMapManager {
 
   onQuadrantChange(nodeId, quadrant) {
     if (!this.setNodes) return;
+    this.pushUndo();
     this.setNodes(nds => nds.map(n => {
       if (n.id !== nodeId) return n;
       const data = { ...n.data };
@@ -229,6 +262,8 @@ class MindMapManager {
     const edges = this.getEdges();
     const parentNode = nodes.find(n => n.id === parentId);
     if (!parentNode) return;
+
+    this.pushUndo();
 
     const newId = String(this.nodeIdCounter.current++);
     const childCount = edges.filter(e => e.source === parentId).length;
@@ -296,6 +331,8 @@ class MindMapManager {
     const existing = edges.find(e => e.target === nodeId);
     if (existing && existing.source === newParentId) return;
 
+    this.pushUndo();
+
     const newEdges = edges.filter(e => e.target !== nodeId);
     newEdges.push({
       id: `e${newParentId}-${nodeId}`,
@@ -314,6 +351,8 @@ class MindMapManager {
 
   onDelete(nodeId) {
     if (!this.setNodes || !this.setEdges) return;
+
+    this.pushUndo();
 
     const edges = this.getEdges();
     const nodesToDelete = new Set([nodeId]);
@@ -579,6 +618,7 @@ export default function MindMap() {
   const [todos, setTodos] = React.useState([]);
   const [showTodos, setShowTodos] = React.useState(false);
   const [saveStatus, setSaveStatus] = React.useState('saved'); // 'saved' | 'pending' | 'saving' | 'error'
+  const [undoCount, setUndoCount] = React.useState(0); // 撤销栈长度（>0 时可撤销）
   const [lastSavedAt, setLastSavedAt] = React.useState(null);
   const [selectedNodeId, setSelectedNodeId] = React.useState(null);
   const [dropTargetId, setDropTargetId] = React.useState(null);
@@ -801,6 +841,13 @@ export default function MindMap() {
         return;
       }
 
+      // Ctrl/Cmd+Z：撤销上一步操作
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        manager.undo();
+        return;
+      }
+
       if (!selectedNodeId) return;
 
       // 检查是否是根节点
@@ -927,6 +974,7 @@ export default function MindMap() {
     manager.setEdges = setEdges;
     manager.getNodes = () => nodesRef.current;
     manager.getEdges = () => edgesRef.current;
+    manager.onUndoStackChange = setUndoCount;
   }, [setNodes, setEdges]);
 
   // 计算 TODO
@@ -1262,6 +1310,7 @@ export default function MindMap() {
   }, [nodes, autoLayout]);
 
   const onConnect = React.useCallback((params) => {
+    manager.pushUndo();
     setEdges(eds => [...eds, {
       ...params,
       type: 'default',
@@ -1477,6 +1526,7 @@ export default function MindMap() {
       if (result.project?.updatedAt) syncBaseRef.current.updatedAt = result.project.updatedAt;
       setProjects(prev => prev.map(p => (p.id === pid ? { ...p, name } : p)));
       // 同步根节点标题为项目名
+      manager.pushUndo();
       setNodes(nds => nds.map(n => (n.data?.isRoot ? { ...n, data: { ...n.data, label: name } } : n)));
     }
   };
@@ -1628,6 +1678,14 @@ export default function MindMap() {
           <p className="subtitle">双击编辑 | 选中后：Tab 子节点 · Enter 同级 · Del 删除 · R/P/D/C 状态 · 1-4 四象限 · 拖拽改层级</p>
         </div>
         <div className="toolbar-actions">
+          <button
+            onClick={() => manager.undo()}
+            className="btn btn-outline btn-sm"
+            disabled={undoCount === 0}
+            title="撤销上一步操作（Ctrl/Cmd+Z）"
+          >
+            撤销
+          </button>
           <button onClick={() => setShowTodos(!showTodos)} className="btn btn-outline">
             {showTodos ? '隐藏' : '显示'} 任务 ({todos.length})
           </button>
@@ -1692,6 +1750,7 @@ export default function MindMap() {
                 <p>点击下方按钮创建第一个节点</p>
                 <button
                   onClick={() => {
+                    manager.pushUndo();
                     const newId = String(manager.nodeIdCounter.current++);
                     setNodes([{
                       id: newId,
