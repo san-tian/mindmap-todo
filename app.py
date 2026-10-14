@@ -122,7 +122,9 @@ def _project_to_markdown(p):
             return
         mark = STATUS_MARKS.get(node.get('data', {}).get('status', 'pending'), '○')
         label = node.get('data', {}).get('label', '')
-        lines.append('  ' * depth + '- ' + mark + ' ' + label)
+        links = node.get('data', {}).get('links') or []
+        link_suffix = ''.join(f' [{i + 1}]({u})' for i, u in enumerate(links))
+        lines.append('  ' * depth + '- ' + mark + ' ' + label + link_suffix)
         for c in children.get(nid, []):
             walk(c, depth + 1)
 
@@ -193,6 +195,30 @@ def _first_present(d, *keys):
         if v is not None:
             return v
     return None
+
+
+def _normalize_url(u):
+    """规整单个链接：去空白、无协议时补 https://，非法返回 None。"""
+    u = (u or '').strip()
+    if not u:
+        return None
+    if '://' not in u and not u.startswith(('mailto:', 'tel:', '/', '#')):
+        u = 'https://' + u
+    return u
+
+
+def _normalize_links(links):
+    """规整 links 列表：去空、去重、逐项 _normalize_url；无有效项返回 None。"""
+    if not isinstance(links, list):
+        return None
+    out = []
+    for u in links:
+        if not isinstance(u, str):
+            continue
+        nu = _normalize_url(u)
+        if nu and nu not in out:
+            out.append(nu)
+    return out or None
 
 
 def _migrate_legacy():
@@ -464,6 +490,12 @@ def api_update_node(pid, nid):
                 node['data']['key'] = body['key']
             else:
                 node['data'].pop('key', None)
+        if 'links' in body:
+            links = _normalize_links(body.get('links'))
+            if links:
+                node['data']['links'] = links
+            else:
+                node['data'].pop('links', None)
 
         p = _save_project(pid, nodes, p.get('edges', []))
         return jsonify({'success': True, 'node': node, 'project': p})
@@ -669,6 +701,9 @@ def api_agent_edit(pid):
                     data['key'] = node_key
                 if op.get('quadrant') in QUADRANT_KEYS:
                     data['quadrant'] = op['quadrant']
+                links = _normalize_links(_first_present(op, 'links', 'urls'))
+                if links:
+                    data['links'] = links
                 node = {'id': next_id(), 'type': 'custom', 'position': {'x': 50, 'y': 250}, 'data': data}
                 nodes.append(node)
             else:
@@ -685,6 +720,12 @@ def api_agent_edit(pid):
                         node['data']['quadrant'] = op['quadrant']
                     else:
                         node['data'].pop('quadrant', None)
+                if 'links' in op or 'urls' in op:
+                    links = _normalize_links(_first_present(op, 'links', 'urls'))
+                    if links:
+                        node['data']['links'] = links
+                    else:
+                        node['data'].pop('links', None)
                 if node_key:
                     node['data']['key'] = node_key
 

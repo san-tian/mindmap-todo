@@ -11,7 +11,7 @@ import ReactFlow, {
   useEdgesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Plus, Save, Check, Circle, Play, Info, Clock, Pause } from 'lucide-react';
+import { Plus, Save, Check, Circle, Play, Info, Clock, Pause, Link2 } from 'lucide-react';
 import './MindMap.css';
 import { storage } from './storage';
 
@@ -74,12 +74,14 @@ const sanitizeNode = (n) => ({
     doneAt: n.data?.doneAt ?? null,
     quadrant: n.data?.quadrant ?? null,
     key: n.data?.key ?? null,
+    links: Array.isArray(n.data?.links) ? n.data.links : null,
   },
 });
 const nodeContentSig = (n) => JSON.stringify([
   n.data?.label ?? '', n.data?.status ?? 'pending',
   n.data?.createdAt ?? null, n.data?.doneAt ?? null, n.data?.quadrant ?? null,
   n.data?.key ?? null,
+  n.data?.links ?? null,
 ]);
 const edgeKey = (e) => `${e.source}->${e.target}`;
 // —— 导出：文字版 Markdown 与 JSON 留档 ——
@@ -101,7 +103,9 @@ const buildMarkdown = (nodes, edges, name) => {
     const n = byId.get(id);
     if (!n) return;
     const mark = STATUS_MARKS[n.data?.status || 'pending'] || '○';
-    lines.push('  '.repeat(depth) + '- ' + mark + ' ' + (n.data?.label || ''));
+    const links = Array.isArray(n.data?.links) ? n.data.links : [];
+    const linkSuffix = links.map((u, i) => ` [${i + 1}](${u})`).join('');
+    lines.push('  '.repeat(depth) + '- ' + mark + ' ' + (n.data?.label || '') + linkSuffix);
     (children.get(id) || []).forEach(c => walk(c, depth + 1));
   };
   // 单根且根本身 label == 项目名：跳过根，从一级分支开始（避免标题重复）
@@ -111,6 +115,16 @@ const buildMarkdown = (nodes, edges, name) => {
     rootIds.forEach(r => walk(r, 0));
   }
   return lines.join('\n') + '\n';
+};
+
+// 规整链接：去空白、无协议补 https://，非法返回 null
+const normalizeUrl = (u) => {
+  const s = (u || '').trim();
+  if (!s) return null;
+  if (!s.includes('://') && !s.startsWith('mailto:') && !s.startsWith('tel:') && !s.startsWith('/') && !s.startsWith('#')) {
+    return 'https://' + s;
+  }
+  return s;
 };
 
 const copyTextToClipboard = async (text) => {
@@ -251,6 +265,30 @@ class MindMapManager {
       } else {
         delete data.quadrant;
       }
+      return { ...n, data };
+    }));
+  }
+
+  onAddLinks(nodeId, links) {
+    if (!this.setNodes || !Array.isArray(links) || links.length === 0) return;
+    this.pushUndo();
+    this.setNodes(nds => nds.map(n => {
+      if (n.id !== nodeId) return n;
+      const existing = Array.isArray(n.data.links) ? n.data.links : [];
+      const merged = [...existing, ...links.filter(u => u && !existing.includes(u))];
+      return { ...n, data: { ...n.data, links: merged } };
+    }));
+  }
+
+  onRemoveLink(nodeId, index) {
+    if (!this.setNodes) return;
+    this.pushUndo();
+    this.setNodes(nds => nds.map(n => {
+      if (n.id !== nodeId) return n;
+      const links = Array.isArray(n.data.links) ? [...n.data.links] : [];
+      links.splice(index, 1);
+      const data = { ...n.data, links };
+      if (links.length === 0) delete data.links;
       return { ...n, data };
     }));
   }
@@ -509,6 +547,28 @@ function CustomNode({ data, id }) {
             >
               {label}
             </div>
+          )}
+          {!isEditing && Array.isArray(data.links) && data.links.length > 0 && (
+            <span className="node-links nodrag">
+              {data.links.map((url, i) => (
+                <button
+                  key={`${url}-${i}`}
+                  className="link-btn nodrag"
+                  title={`${url}（点击打开；右键移除）`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    manager.onRemoveLink(id, i);
+                  }}
+                >
+                  <Link2 className="icon link-icon" />
+                </button>
+              ))}
+            </span>
           )}
           {data.quadrant && QUADRANTS[data.quadrant] && (
             <span
@@ -855,6 +915,20 @@ export default function MindMap() {
       const isRootNode = selectedNode?.data?.isRoot || false;
       // 只有叶子节点才有状态；中间节点（含二级 task 若有子任务）不响应状态快捷键
       const isLeafSel = selectedNode ? !edgesRef.current.some(e => e.source === selectedNodeId) : false;
+
+      // L：给选中节点添加链接（可连续添加，留空/取消结束）
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        const links = [];
+        while (true) {
+          const input = window.prompt(links.length ? '继续添加链接（留空或取消结束）：' : '输入链接地址（可连续添加，留空结束）：');
+          if (input === null || input.trim() === '') break;
+          const url = normalizeUrl(input);
+          if (url && !links.includes(url)) links.push(url);
+        }
+        if (links.length) manager.onAddLinks(selectedNodeId, links);
+        return;
+      }
 
       // Enter：创建同级节点（根节点不允许）
       if (e.key === 'Enter') {
@@ -1675,7 +1749,7 @@ export default function MindMap() {
               删除
             </button>
           </div>
-          <p className="subtitle">双击编辑 | 选中后：Tab 子节点 · Enter 同级 · Del 删除 · R/P/D/C 状态 · 1-4 四象限 · 拖拽改层级</p>
+          <p className="subtitle">双击编辑 | 选中后：Tab 子节点 · Enter 同级 · Del 删除 · R/P/D/C 状态 · 1-4 四象限 · L 链接 · 拖拽改层级</p>
         </div>
         <div className="toolbar-actions">
           <button

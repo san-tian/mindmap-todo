@@ -25,6 +25,7 @@
     "createdAt": "2026-08-19T06:57:05Z",  // 创建时间（自动生成）
     "doneAt": "2026-08-19T07:00:00Z",      // 完成时间（status→done 时自动生成）
     "quadrant": "q1"                       // 四象限：q1/q2/q3/q4（可选）
+    "links": ["https://example.com"]       // 外链/附件（可选，字符串数组）
   }
 }
 
@@ -66,7 +67,7 @@
 | PATCH | `/api/projects/<pid>` | 重命名项目 `{name}` |
 | DELETE | `/api/projects/<pid>` | 删除项目 |
 | POST | `/api/projects/<pid>/nodes` | 新增节点 `{label, parentId?, status?}` |
-| PATCH | `/api/projects/<pid>/nodes/<nid>` | 更新节点 `{label?, status?}` |
+| PATCH | `/api/projects/<pid>/nodes/<nid>` | 更新节点 `{label?, status?, links?, quadrant?, key?}` |
 | DELETE | `/api/projects/<pid>/nodes/<nid>` | 删除节点及其子树 |
 | POST | `/api/projects/<pid>/nodes/<nid>/move` | 移动节点到新父级 `{parentId}` |
 
@@ -123,6 +124,7 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 - 节点 `status` 只接受 `running` / `waiting` / `pending` / `idel` / `done` / `context`。
 - **状态只在叶子节点**：对非叶子节点（有子节点）设置 status 会返回 400。
 - 节点 `quadrant`（四象限，可选）只接受 `q1`（重要紧急）/ `q2`（重要不紧急）/ `q3`（不重要紧急）/ `q4`（不重要不紧急）；传空值表示清除。
+- 节点 `links`（可选，字符串数组）：外链/附件地址，前端节点上显示小图标点击跳转；无协议时自动补 `https://`，传空数组表示清除。
 - 节点自动记录 `createdAt`（创建时间）和 `doneAt`（变为 done 的时间；取消 done 时自动清除）。
 - 前端加载项目时会自动按当前规则重新排版，因此 API 写入的坐标只是初始值，不必精确。
 
@@ -144,6 +146,7 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 | 幂等标识（可选） | `id_key` | `key` |
 | 父节点 id | `parent_id` | `parentId` |
 | 父节点 key | `parent_key` | `parentKey` |
+| 外链/附件 | `links`（字符串数组） | `urls` |
 
 ```jsonc
 {
@@ -164,6 +167,7 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 - `text` = 任务内容（唯一真正需要 LLM 理解的字段）；`id_key` = 稳定幂等标识，给定后按它查找更新而非新建。
 - `parent_id` / `parent_key` 缺省挂根节点；`status`：`running`/`waiting`/`pending`/`idel`/`done`/`context`；`quadrant`：`q1`~`q4`。
 - `status`：`running`/`waiting`/`pending`/`idel`/`done`/`context`；`quadrant`：`q1`~`q4`。
+- `links`：字符串数组，外链/附件；无协议时自动补 `https://`；传空数组清除。
 - **状态只在叶子节点**：对已有中间节点（有子节点）设置 status 会返回 400；新建节点是叶子，可带 status。
 - 整批原子：任一 op 非法则整批不生效，返回 400 并附 `op[下标]` 错误。
 - 会自动防环（不能挂到自身或后代下）、递归删子树、记录 `createdAt`/`doneAt`。
