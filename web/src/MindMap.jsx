@@ -916,17 +916,13 @@ export default function MindMap() {
       // 只有叶子节点才有状态；中间节点（含二级 task 若有子任务）不响应状态快捷键
       const isLeafSel = selectedNode ? !edgesRef.current.some(e => e.source === selectedNodeId) : false;
 
-      // L：给选中节点添加链接（可连续添加，留空/取消结束）
+      // L：给选中节点添加一个链接（每次只弹一次输入框）
       if (e.key === 'l' || e.key === 'L') {
         e.preventDefault();
-        const links = [];
-        while (true) {
-          const input = window.prompt(links.length ? '继续添加链接（留空或取消结束）：' : '输入链接地址（可连续添加，留空结束）：');
-          if (input === null || input.trim() === '') break;
-          const url = normalizeUrl(input);
-          if (url && !links.includes(url)) links.push(url);
-        }
-        if (links.length) manager.onAddLinks(selectedNodeId, links);
+        const input = window.prompt('输入链接地址：');
+        if (input === null || input.trim() === '') return;
+        const url = normalizeUrl(input);
+        if (url) manager.onAddLinks(selectedNodeId, [url]);
         return;
       }
 
