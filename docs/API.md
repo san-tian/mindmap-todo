@@ -63,9 +63,11 @@
 | GET | `/api/projects` | 列出所有项目 |
 | POST | `/api/projects` | 创建项目 `{name}` |
 | GET | `/api/projects/<pid>` | 获取项目完整数据 |
-| POST | `/api/projects/<pid>` | 保存项目 `{nodes, edges}` |
+| POST | `/api/projects/<pid>` | 保存项目 `{nodes, edges, baseUpdatedAt?, allowEmpty?}` |
 | PATCH | `/api/projects/<pid>` | 重命名项目 `{name}` |
 | DELETE | `/api/projects/<pid>` | 删除项目 |
+| GET | `/api/projects/<pid>/history` | 列出历史快照（事故恢复用） |
+| POST | `/api/projects/<pid>/restore` | 用历史快照恢复 `{snapshot}` |
 | POST | `/api/projects/<pid>/nodes` | 新增节点 `{label, parentId?, status?}` |
 | PATCH | `/api/projects/<pid>/nodes/<nid>` | 更新节点 `{label?, status?, links?, quadrant?, key?}` |
 | DELETE | `/api/projects/<pid>/nodes/<nid>` | 删除节点及其子树 |
@@ -116,6 +118,26 @@ curl -s -X POST $BASE/api/projects/e0470148/nodes/5/move \
 curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 ```
 
+## 保存保据（防止误清空/误覆盖）
+
+保存接口内置三层保护，误操作可回退：
+
+1. **拒绕空覆盖**：服务端已有节点、而请求 `nodes` 为空且未传 `allowEmpty: true` 时，返回 `409` 且不写入：
+   ```jsonc
+   { "success": false, "blocked": true, "error": "拒绝用空数据覆盖非空项目..." }
+   ```
+   这是为了堵住「加载失败 → 画布清空 → 自动保存把整周数据抹掉」的事故。
+2. **版本历史快照**：每次覆盖前把旧版本存到 `data/projects/.history/<pid>/`（按分钟分桶；节点数瞟减超过 30% 时强制额外留档），每个项目保留最近 60 份。
+3. **快照恢复**：
+   ```bash
+   # 看快照
+   curl -s $BASE/api/projects/$PID/history
+   # 恢复（恢复前当前版本也会留档，可再回退）
+   curl -s -X POST $BASE/api/projects/$PID/restore \
+     -H 'Content-Type: application/json' \
+     -d '{"snapshot":"20261021-1419.json"}'
+   ```
+
 ## 注意事项
 
 - 新增节点不指定 `parentId` 时会成为新的根节点；指定则挂为子节点。
@@ -127,6 +149,7 @@ curl -s -X DELETE $BASE/api/projects/e0470148/nodes/5
 - 节点 `links`（可选，字符串数组）：外链/附件地址，前端节点上显示小图标点击跳转；无协议时自动补 `https://`，传空数组表示清除。
 - 节点自动记录 `createdAt`（创建时间）和 `doneAt`（变为 done 的时间；取消 done 时自动清除）。
 - 前端加载项目时会自动按当前规则重新排版，因此 API 写入的坐标只是初始值，不必精确。
+- **清空项目**必须显式传 `allowEmpty: true`，否则会被拒（防误清空）。前端在加载成功后才会自动带上该标记。
 
 ## Agent 接口（面向脚本/agent，无鉴权，靠网络隔离）
 
