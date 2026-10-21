@@ -818,6 +818,8 @@ export default function MindMap() {
   const doSave = React.useCallback(async () => {
     const pid = currentProjectIdRef.current;
     if (!pid) return;
+    // 未经成功加载绝不保存：避免「加载失败 → 空画布 → 把空数据写回服务端」
+    if (!loadedRef.current) return;
     if (savingRef.current) {
       // 已有保存在进行：稍后再试（重新调度，不丢失改动）
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -829,7 +831,14 @@ export default function MindMap() {
     try {
       const nodesToSave = nodesRef.current.map(sanitizeNode);
       const edgesToSave = edgesRef.current.map(e => ({ id: e.id, source: e.source, target: e.target }));
-      const result = await storage.saveProject(pid, nodesToSave, edgesToSave, syncBaseRef.current.updatedAt);
+      // 本地为空但基线非空：几乎必是加载异常/状态错乱，绝不用空数据覆盖服务端
+      if (nodesToSave.length === 0 && (syncBaseRef.current.nodes || []).length > 0) {
+        savingRef.current = false;
+        setSaveStatus('error');
+        console.error('已阻止空数据覆盖：本地节点为空但基线非空，跳过本次保存');
+        return;
+      }
+      const result = await storage.saveProject(pid, nodesToSave, edgesToSave, syncBaseRef.current.updatedAt, true);
       savingRef.current = false;
       if (result.success) {
         syncBaseRef.current = { updatedAt: result.updatedAt, nodes: nodesToSave, edges: edgesToSave };
@@ -839,6 +848,13 @@ export default function MindMap() {
         setLastSavedAt(new Date());
       } else if (result.conflict) {
         // 别的端先存了：三方合并（本地改动优先，未改的采纳服务端），再走防抖通道重试
+        const serverNodes = result.project?.nodes || [];
+        if (serverNodes.length === 0 && nodesToSave.length > 0) {
+          // 服务端被异常清空：不能走合并（合并会把本地节点当成「服务端已删除」而丢弃）
+          console.error('服务端项目为空，已跳过合并以避免本地数据被丢弃');
+          setSaveStatus('error');
+          return;
+        }
         try {
           const merged = mergeProjectData(
             syncBaseRef.current.nodes, syncBaseRef.current.edges,
@@ -853,6 +869,11 @@ export default function MindMap() {
           if (result.project) applyProjectDataRef.current?.(result.project);
           setSaveStatus('saved');
         }
+      } else if (result.blocked) {
+        // 服务端拦下了空覆盖：保持本地数据，提示错误，不再自动重试
+        console.error('服务端拒绝空数据覆盖，已保留本地数据');
+        setSaveStatus('error');
+        saveRetryRef.current = 6;
       } else {
         throw new Error(result.error || '保存失败');
       }
@@ -1504,6 +1525,11 @@ export default function MindMap() {
         const result = await storage.getProject(pid);
         if (result.success && result.project && result.project.updatedAt &&
             result.project.updatedAt !== syncBaseRef.current.updatedAt) {
+          // 保护：本地有内容但服务端为空（异常清空）时不自取，避免把本地也抹掉
+          if ((result.project.nodes || []).length === 0 && nodesRef.current.length > 0) {
+            console.warn('服务端项目为空但本地有内容，已跳过热加载');
+            return;
+          }
           applyProjectData(result.project);
         }
       } catch { /* 网络抖动忽略 */ }
@@ -1517,19 +1543,23 @@ export default function MindMap() {
     currentProjectIdRef.current = id;
     setCurrentProjectId(id);
     setLoading(true);
+    let loadedOk = false;
     try {
       const result = await storage.getProject(id);
       if (result.success && result.project) {
         applyProjectData(result.project);
+        loadedOk = true;
+      } else {
+        console.error('加载项目失败:', result?.error || '未知错误');
       }
     } catch (error) {
+      // 网络/服务端异常：保留当前画布不清空。
+      // 一旦清空，后续自动保存会把空数据写回服务端，直接抹掉整周内容。
       console.error('加载项目失败:', error);
-      setNodes([]);
-      setEdges([]);
     } finally {
       setLoading(false);
-      // 加载完成后才开启自动保存（避免把刚加载的数据再保存一遍）
-      setTimeout(() => { loadedRef.current = true; }, 0);
+      // 只有加载成功才开启自动保存，避免空/旧状态回写
+      if (loadedOk) setTimeout(() => { loadedRef.current = true; }, 0);
     }
   };
 

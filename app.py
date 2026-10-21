@@ -20,6 +20,9 @@ PROJECTS_DIR = os.path.join(DATA_DIR, 'projects')
 MINDMAP_DATA_FILE = os.path.join(DATA_DIR, 'mindmap.json')  # 旧版单图数据，仅用于迁移
 WEB_DIST_DIR = os.path.join(BASE_DIR, 'web', 'dist')
 SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
+# 历史快照目录（每次覆盖前留档旧版本，用于误操作/事故恢复）
+HISTORY_DIR = os.path.join(PROJECTS_DIR, '.history')
+HISTORY_KEEP = 60
 
 
 def _now():
@@ -91,6 +94,12 @@ def _save_project(pid, nodes, edges, name=None):
     if not f:
         raise ValueError('invalid project id')
     p = _load_project(pid) or {'id': pid, 'createdAt': _now()}
+    # 覆盖前留档旧版本：节点数骤减（含被清空）时强制留档，其余按分钟分桶
+    old_nodes = p.get('nodes') or []
+    if old_nodes:
+        shrink = len(old_nodes) - len(nodes or [])
+        force = shrink > max(1, int(len(old_nodes) * 0.3))
+        _snapshot_project(pid, p, force=force)
     p['nodes'] = nodes
     p['edges'] = edges
     if name is not None:
@@ -98,6 +107,61 @@ def _save_project(pid, nodes, edges, name=None):
     p['updatedAt'] = _now()
     _atomic_write(f, p)
     return p
+
+
+def _history_dir(pid):
+    d = os.path.join(HISTORY_DIR, pid)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _snapshot_project(pid, p, force=False):
+    """把项目旧版本存为历史快照（按分钟分桶；force 时用秒级文件名并跳过去重）。"""
+    if not p or not p.get('nodes'):
+        return None
+    try:
+        d = _history_dir(pid)
+        now = datetime.now(timezone.utc)
+        name = now.strftime('%Y%m%d-%H%M') + '.json'
+        target = os.path.join(d, name)
+        if os.path.exists(target):
+            if not force:
+                return None
+            target = os.path.join(d, now.strftime('%Y%m%d-%H%M%S-%f') + '.json')
+        _atomic_write(target, p)
+        files = sorted(x for x in os.listdir(d) if x.endswith('.json'))
+        for old in files[:-HISTORY_KEEP]:
+            try:
+                os.remove(os.path.join(d, old))
+            except OSError:
+                pass
+        return target
+    except Exception as e:
+        print(f'[history] snapshot failed pid={pid}: {e}', flush=True)
+        return None
+
+
+def _list_snapshots(pid):
+    """列出项目历史快照（按时间倒序）。"""
+    d = os.path.join(HISTORY_DIR, pid)
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for fn in sorted((x for x in os.listdir(d) if x.endswith('.json')), reverse=True):
+        path = os.path.join(d, fn)
+        try:
+            with open(path, encoding='utf-8') as fh:
+                snap = json.load(fh)
+            out.append({
+                'snapshot': fn,
+                'nodeCount': len(snap.get('nodes') or []),
+                'edgeCount': len(snap.get('edges') or []),
+                'updatedAt': snap.get('updatedAt'),
+                'size': os.path.getsize(path),
+            })
+        except Exception:
+            continue
+    return out
 
 
 def _project_to_markdown(p):
@@ -336,6 +400,18 @@ def api_save_project(pid):
         edges = body.get('edges', [])
         base_updated_at = body.get('baseUpdatedAt')
         current = _load_project(pid)
+        # 安全护栏：拒绝用空数据覆盖非空项目。
+        # 「加载失败 → 画布清空 → 自动保存」会把整周数据一次抹掉，这里必须挡住。
+        # 确实要清空时显式传 allowEmpty=true。
+        if current and (current.get('nodes') or []) and not nodes and not body.get('allowEmpty'):
+            print(f"[save] BLOCKED empty overwrite pid={pid} server_nodes={len(current.get('nodes') or [])}", flush=True)
+            return jsonify({
+                'success': False,
+                'blocked': True,
+                'error': '拒绝用空数据覆盖非空项目（可能是加载失败导致；确认清空请传 allowEmpty=true）',
+                'updatedAt': current.get('updatedAt'),
+                'project': current,
+            }), 409
         if current and base_updated_at and base_updated_at != current.get('updatedAt'):
             print(f"[save] CONFLICT pid={pid} base={'有' if base_updated_at else '无'} "
                   f"client_ver={base_updated_at} server_ver={current.get('updatedAt')} nodes={len(nodes)}", flush=True)
@@ -578,6 +654,47 @@ def api_move_node(pid, nid):
     except Exception as e:
         print(f"Error moving node: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/projects/<pid>/history', methods=['GET'])
+def api_project_history(pid):
+    """列出项目历史快照（误操作/事故恢复用）。"""
+    if not _load_project(pid):
+        return jsonify({'success': False, 'error': 'project not found'}), 404
+    return jsonify({'success': True, 'project': pid, 'snapshots': _list_snapshots(pid)})
+
+
+@app.route('/api/projects/<pid>/restore', methods=['POST'])
+def api_project_restore(pid):
+    """用某个历史快照恢复项目。body: {snapshot} 或 {snapshotIndex}
+
+    恢复前会把当前版本也留一份快照，因此恢复本身可回退。
+    """
+    p = _load_project(pid)
+    if not p:
+        return jsonify({'success': False, 'error': 'project not found'}), 404
+    body = request.get_json(silent=True) or {}
+    name = body.get('snapshot')
+    if not name and body.get('snapshotIndex') is not None:
+        snaps = _list_snapshots(pid)
+        idx = body.get('snapshotIndex')
+        if isinstance(idx, int) and 0 <= idx < len(snaps):
+            name = snaps[idx]['snapshot']
+    if not name or '/' in name or '\\' in name or not name.endswith('.json'):
+        return jsonify({'success': False, 'error': 'snapshot 非法'}), 400
+    path = os.path.join(HISTORY_DIR, pid, name)
+    if not os.path.isfile(path):
+        return jsonify({'success': False, 'error': 'snapshot not found'}), 404
+    try:
+        with open(path, encoding='utf-8') as fh:
+            snap = json.load(fh)
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'snapshot 读取失败: {e}'}), 500
+    # 恢复当前版本（可回退），再写入快照内容
+    _snapshot_project(pid, p, force=True)
+    restored = _save_project(pid, snap.get('nodes') or [], snap.get('edges') or [], name=snap.get('name'))
+    print(f"[restore] pid={pid} from={name} nodes={len(restored.get('nodes') or [])}", flush=True)
+    return jsonify({'success': True, 'project': restored, 'restoredFrom': name})
 
 
 @app.route('/api/projects/<pid>/export', methods=['GET'])

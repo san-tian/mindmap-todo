@@ -64,7 +64,7 @@ const localAdapter = {
     return { success: true, project: p };
   },
 
-  async saveProject(id, nodes, edges, baseUpdatedAt) {
+  async saveProject(id, nodes, edges, baseUpdatedAt, allowEmpty) {
     const all = readProjects();
     const p = all[id];
     if (!p) return { success: false, error: 'project not found' };
@@ -110,6 +110,8 @@ const localAdapter = {
     localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
     return { success: true, settings };
   },
+  getHistory: () => Promise.resolve({ success: true, snapshots: [] }),
+  restoreProject: () => Promise.resolve({ success: false, error: 'not supported' }),
 };
 
 // ---------- api 实现 ----------
@@ -126,9 +128,11 @@ const apiAdapter = {
   listProjects: () => request('GET', '/api/projects'),
   createProject: (name) => request('POST', '/api/projects', { name }),
   getProject: (id) => request('GET', `/api/projects/${id}`),
-  saveProject: (id, nodes, edges, baseUpdatedAt) => request('POST', `/api/projects/${id}`, { nodes, edges, baseUpdatedAt }),
+  saveProject: (id, nodes, edges, baseUpdatedAt, allowEmpty) => request('POST', `/api/projects/${id}`, { nodes, edges, baseUpdatedAt, allowEmpty }),
   renameProject: (id, name) => request('PATCH', `/api/projects/${id}`, { name }),
   deleteProject: (id) => request('DELETE', `/api/projects/${id}`),
+  getHistory: (id) => request('GET', `/api/projects/${id}/history`),
+  restoreProject: (id, snapshot) => request('POST', `/api/projects/${id}/restore`, { snapshot }),
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('POST', '/api/settings', settings),
 };
