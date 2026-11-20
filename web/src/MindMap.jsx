@@ -140,7 +140,7 @@ const copyTextToClipboard = async (text) => {
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
-    ta.focus();
+    ta.focus({ preventScroll: true });
     ta.select();
     const ok = document.execCommand('copy');
     document.body.removeChild(ta);
@@ -439,7 +439,7 @@ function CustomNode({ data, id }) {
   React.useEffect(() => {
     if (isEditing && inputRef.current) {
       const input = inputRef.current;
-      input.focus();
+      input.focus({ preventScroll: true });
       input.select();
 
       const handleKeyDown = (e) => {
@@ -595,7 +595,7 @@ function TodoItem({ todo, statusKey, onSelect, onStatusChange, onLabelChange, on
 
   React.useEffect(() => {
     if (editing && inputRef.current) {
-      inputRef.current.focus();
+      inputRef.current.focus({ preventScroll: true });
       inputRef.current.select();
     }
   }, [editing]);
@@ -676,7 +676,7 @@ export default function MindMap() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [todos, setTodos] = React.useState([]);
-  const [showTodos, setShowTodos] = React.useState(false);
+  const [showTodos, setShowTodos] = React.useState(true);
   const [saveStatus, setSaveStatus] = React.useState('saved'); // 'saved' | 'pending' | 'saving' | 'error'
   const [undoCount, setUndoCount] = React.useState(0); // 撤销栈长度（>0 时可撤销）
   const [lastSavedAt, setLastSavedAt] = React.useState(null);
@@ -745,6 +745,12 @@ export default function MindMap() {
           if (res.settings.layoutMode) {
             setLayoutMode(res.settings.layoutMode === 'compact' ? 'compact' : 'standard');
           }
+          if (typeof res.settings.showTodos === 'boolean') {
+            setShowTodos(res.settings.showTodos);
+          }
+          if (res.settings.viewMode && ['status', 'time', 'quadrant'].includes(res.settings.viewMode)) {
+            setViewMode(res.settings.viewMode);
+          }
         }
       })
       .catch(() => {})
@@ -757,8 +763,8 @@ export default function MindMap() {
   // 设置变化时保存到后端（settingsLoaded 进入依赖：加载完成后补存用户在加载期间的手动修改）
   React.useEffect(() => {
     if (!settingsLoaded) return;
-    storage.saveSettings({ bgMode, layoutMode }).catch(() => {});
-  }, [bgMode, layoutMode, settingsLoaded]);
+    storage.saveSettings({ bgMode, layoutMode, showTodos, viewMode }).catch(() => {});
+  }, [bgMode, layoutMode, showTodos, viewMode, settingsLoaded]);
 
   // 手动切换布局模式时重新排版；首次挂载跳过（初始布局由项目加载流程负责）。
   // 注意：不能用“设置是否已加载”做门控——否则加载早期切换会被静默吞掉，
@@ -1786,7 +1792,10 @@ export default function MindMap() {
           >
             撤销
           </button>
-          <button onClick={() => setShowTodos(!showTodos)} className="btn btn-outline">
+          <button
+            onClick={() => { userTouchedSettingsRef.current = true; setShowTodos(!showTodos); }}
+            className="btn btn-outline"
+          >
             {showTodos ? '隐藏' : '显示'} 任务 ({todos.length})
           </button>
           <select
@@ -1914,9 +1923,9 @@ export default function MindMap() {
             <div className="todo-header">
               <h2 className="todo-title">任务列表</h2>
               <div className="todo-view-switch">
-                <button className={viewMode === 'status' ? 'active' : ''} onClick={() => setViewMode('status')}>状态</button>
-                <button className={viewMode === 'time' ? 'active' : ''} onClick={() => setViewMode('time')}>时间</button>
-                <button className={viewMode === 'quadrant' ? 'active' : ''} onClick={() => setViewMode('quadrant')}>四象限</button>
+                <button className={viewMode === 'status' ? 'active' : ''} onClick={() => { userTouchedSettingsRef.current = true; setViewMode('status'); }}>状态</button>
+                <button className={viewMode === 'time' ? 'active' : ''} onClick={() => { userTouchedSettingsRef.current = true; setViewMode('time'); }}>时间</button>
+                <button className={viewMode === 'quadrant' ? 'active' : ''} onClick={() => { userTouchedSettingsRef.current = true; setViewMode('quadrant'); }}>四象限</button>
               </div>
             </div>
 

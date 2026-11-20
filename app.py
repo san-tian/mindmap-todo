@@ -62,14 +62,22 @@ def _atomic_write(path, data):
 
 
 def load_settings():
-    """加载全局设置（背景等）"""
+    """加载全局设置（背景、布局、侧栏状态等）"""
+    defaults = {
+        'bgMode': 'dots',
+        'layoutMode': 'standard',
+        'showTodos': True,
+        'viewMode': 'status',
+    }
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {**defaults, **data}
         except Exception:
             pass
-    return {'bgMode': 'white'}
+    return defaults
 
 
 def save_settings(data):
@@ -889,14 +897,26 @@ def api_get_settings():
 def api_save_settings():
     """保存全局设置"""
     try:
+        current = load_settings()
         body = request.get_json(silent=True) or {}
-        bg_mode = body.get('bgMode', 'white')
+        bg_mode = body.get('bgMode', current.get('bgMode', 'dots'))
         if bg_mode not in ('white', 'dots', 'lines'):
-            bg_mode = 'white'
-        layout_mode = body.get('layoutMode', 'standard')
+            bg_mode = 'dots'
+        layout_mode = body.get('layoutMode', current.get('layoutMode', 'standard'))
         if layout_mode not in ('compact', 'standard'):
             layout_mode = 'standard'
-        settings = {'bgMode': bg_mode, 'layoutMode': layout_mode}
+        show_todos = body.get('showTodos', current.get('showTodos', True))
+        if not isinstance(show_todos, bool):
+            show_todos = True
+        view_mode = body.get('viewMode', current.get('viewMode', 'status'))
+        if view_mode not in ('status', 'time', 'quadrant'):
+            view_mode = 'status'
+        settings = {
+            'bgMode': bg_mode,
+            'layoutMode': layout_mode,
+            'showTodos': show_todos,
+            'viewMode': view_mode,
+        }
         save_settings(settings)
         return jsonify({'success': True, 'settings': settings})
     except Exception as e:
