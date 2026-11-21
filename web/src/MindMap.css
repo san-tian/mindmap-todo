@@ -42,7 +42,8 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* 避免焦点跳转滚动整个应用，把顶部工具栏带出视口。 */
+  overflow: clip;
   background: var(--surface);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
@@ -52,6 +53,8 @@
    ============================================================ */
 .toolbar {
   min-height: 60px;
+  max-height: 50%;
+  overflow-y: auto;
   flex-shrink: 0;
   position: relative;
   z-index: 10;
@@ -116,6 +119,8 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
+  /* Safari 的长选项可能撑宽外层工具栏的滚动区域。 */
+  overflow-x: clip;
 }
 
 .project-select {
@@ -220,12 +225,14 @@
    ============================================================ */
 .main-content {
   flex: 1;
+  min-height: 0;
   display: flex;
-  overflow: hidden;
+  overflow: clip;
 }
 
 .mindmap-container {
   flex: 1;
+  min-width: 0;
   position: relative;
   background: var(--surface);
 }
